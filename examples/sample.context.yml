@@ -1,0 +1,38 @@
+# .context.yml — Architecture rules for the sample project
+#
+# "layers" defines the ordered hierarchy (highest to lowest level).
+# "rules" defines what each layer is forbidden from (or restricted to) importing.
+
+architecture:
+  layers:
+    - controller
+    - service
+    - repository
+
+rules:
+  # Blacklist: controllers must go through the service layer, never touch the DB layer directly.
+  controller:
+    cannot_import:
+      - repository
+
+  # Whitelist: services may only import from repositories (and nothing else in the known layers).
+  # Remove or comment out can_only_import to allow services to import freely.
+  service:
+    can_only_import:
+      - repository
+
+  # No inter-layer restrictions on repositories.
+  repository:
+    cannot_import: []
+
+  # Example: scope a rule to a specific file glob (uncomment to try it):
+  # controller:
+  #   files: "src/controllers/**"
+  #   cannot_import:
+  #     - repository
+
+# Exclude these patterns from scanning entirely (project-relative globs):
+exclude:
+  - "**/*.spec.ts"
+  - "**/*.test.ts"
+  - "**/__mocks__/**"
