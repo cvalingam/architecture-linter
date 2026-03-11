@@ -10,6 +10,10 @@
     "layers"
   ],
   "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "bin": {
     "architecture-linter": "./dist/cli.js"
   },
