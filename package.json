@@ -1,6 +1,6 @@
 {
   "name": "architecture-linter",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A CLI tool that enforces architecture rules in TypeScript projects",
   "keywords": [
     "architecture",
