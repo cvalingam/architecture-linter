@@ -1,0 +1,28 @@
+# action-test.yml — self-tests the GitHub Action using the bundled sample project
+name: Action self-test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  action-test:
+    name: Test GitHub Action
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run architecture-linter action (expect violations)
+        id: lint
+        uses: ./
+        with:
+          config: examples/sample-project/.context-can-only.yml
+          working-directory: examples/sample-project
+          fail-on-violations: 'false'   # don't fail CI — we just want to see output
+
+      - name: Print violation count
+        run: echo "Violations found ${{ steps.lint.outputs.violations }}"

@@ -318,7 +318,98 @@ Fails safely if the workflow file already exists.
 
 ---
 
-## CI integration
+## GitHub Action
+
+The easiest way to enforce architecture rules on every pull request — no Node.js
+setup needed, violations appear as inline code annotations.
+
+```yaml
+# .github/workflows/arch-lint.yml
+name: Architecture Lint
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  arch-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cvalingam/architecture-linter@v0.1.2
+        with:
+          config: .context.yml          # path to your config (default: .context.yml)
+          fail-on-violations: 'true'    # fail the job on violations (default: true)
+          token: ${{ secrets.GITHUB_TOKEN }}  # enables PR comment summary (optional)
+```
+
+### Action inputs
+
+| Input | Default | Description |
+|---|---|---|
+| `config` | `.context.yml` | Path to the config file |
+| `working-directory` | `.` | Root directory to scan |
+| `fail-on-violations` | `true` | Fail the step when violations are found |
+| `token` | `''` | GitHub token — enables PR comment with violation table |
+
+### Action outputs
+
+| Output | Description |
+|---|---|
+| `violations` | Number of violations found (usable in subsequent steps) |
+
+When violations are found, each one appears as a **red annotation** directly on
+the diff line in the PR, and a summary comment is posted to the PR thread.
+
+---
+
+## GitHub Action
+
+The easiest way to enforce architecture rules on every pull request — no manual
+setup required. Violations are posted as inline PR annotations and an optional
+PR comment summary:
+
+```yaml
+# .github/workflows/arch-lint.yml
+name: Architecture Lint
+
+on:
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  arch-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce architecture rules
+        uses: cvalingam/architecture-linter@v0.1.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}   # for PR comment (optional)
+```
+
+**Inputs**
+
+| Input | Default | Description |
+|---|---|---|
+| `config` | `.context.yml` | Path to your config file |
+| `working-directory` | `.` | Root of the project to scan |
+| `fail-on-violations` | `true` | Fail the step when violations are found |
+| `token` | `''` | `GITHUB_TOKEN` — enables PR comment summary |
+
+**Outputs**
+
+| Output | Description |
+|---|---|
+| `violations` | Number of violations found |
+
+---
+
+## CI integration (manual setup)
 
 Run the linter on every push and pull request. The `ci` command generates this
 for you (`architecture-linter ci`), or add the step manually:
