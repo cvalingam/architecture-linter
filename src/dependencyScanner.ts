@@ -24,7 +24,7 @@ export async function scanProject(
 ): Promise<FileScan[]> {
   const absoluteFiles = await fg('**/*.ts', {
     cwd: projectDir,
-    ignore: ['node_modules/**', 'dist/**', '**/*.d.ts', ...exclude],
+    ignore: ['**/node_modules/**', '**/dist/**', '**/*.d.ts', ...exclude],
     absolute: true,
   });
 

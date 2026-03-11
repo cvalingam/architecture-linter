@@ -66,7 +66,7 @@ function runLinter(collection: vscode.DiagnosticCollection): void {
   statusBarItem.show();
 
   // The CLI exits with code 1 when violations are found — ignore err, parse stdout
-  exec(`${cmd} scan --format json`, { cwd: root }, (_err, stdout) => {
+  exec(`${cmd} scan --format json --fix`, { cwd: root }, (_err, stdout) => {
     collection.clear();
 
     let result: LintResult;
