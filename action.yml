@@ -1,0 +1,69 @@
+name: 'Architecture Linter'
+description: 'Scan your TypeScript project for architecture violations defined in .context.yml'
+author: 'cvalingam'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  config:
+    description: 'Path to .context.yml config file'
+    required: false
+    default: '.context.yml'
+  working-directory:
+    description: 'Root directory of the project to scan'
+    required: false
+    default: '.'
+  fail-on-violations:
+    description: 'Fail the workflow step if violations are found'
+    required: false
+    default: 'true'
+  token:
+    description: 'GitHub token for posting a PR comment summary (optional)'
+    required: false
+    default: ''
+
+outputs:
+  violations:
+    description: 'Number of architecture violations found'
+    value: ${{ steps.scan.outputs.violations }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Run architecture-linter scan
+      id: scan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        RESULTS_FILE="${{ runner.temp }}/arch-results.json"
+        npx --yes architecture-linter@latest scan \
+          --format json \
+          --fix \
+          --context "${{ inputs.config }}" \
+          > "$RESULTS_FILE" 2>/dev/null || true
+        VIOLATIONS=$(node -e "
+          try {
+            const r = JSON.parse(require('fs').readFileSync('$RESULTS_FILE','utf8'));
+            console.log((r.violations||[]).length);
+          } catch(e) { console.log(0); }
+        ")
+        echo "violations=$VIOLATIONS" >> "$GITHUB_OUTPUT"
+        echo "results_path=$RESULTS_FILE" >> "$GITHUB_OUTPUT"
+
+    - name: Annotate violations and post PR comment
+      shell: bash
+      run: |
+        node "${{ github.action_path }}/scripts/annotate.js" \
+          "${{ runner.temp }}/arch-results.json" \
+          "${{ inputs.fail-on-violations }}" \
+          "${{ inputs.working-directory }}" \
+          "${{ inputs.token }}" \
+          "${{ github.event.pull_request.number }}" \
+          "${{ github.repository }}"
