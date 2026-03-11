@@ -4,6 +4,11 @@ dist/
 # Test coverage
 coverage/
 
+# VS Code extension build output
+vscode-extension/dist/
+vscode-extension/node_modules/
+vscode-extension/*.vsix
+
 # Dependencies
 node_modules/
 
