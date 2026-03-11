@@ -15,7 +15,7 @@
     "README.md"
   ],
   "bin": {
-    "architecture-linter": "./dist/cli.js"
+    "architecture-linter": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
