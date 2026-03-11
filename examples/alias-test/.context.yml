@@ -1,0 +1,9 @@
+﻿architecture:
+  layers:
+    - controller
+    - repository
+
+rules:
+  controller:
+    cannot_import:
+      - repository

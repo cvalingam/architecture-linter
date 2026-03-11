@@ -42,6 +42,49 @@ export function detectLayer(filePath: string, layers: string[]): string | null {
 }
 
 /**
+ * Builds a short, actionable fix suggestion for a violation.
+ *
+ * For cannot_import violations: lists the layers the source IS allowed to import.
+ * For can_only_import violations: lists the layers the source may legally import.
+ */
+function buildFixSuggestion(
+  sourceLayer: string,
+  targetLayer: string,
+  config: ContextConfig,
+): string {
+  const rule = config.rules?.[sourceLayer];
+  const allLayers = config.architecture.layers;
+
+  if (rule?.cannot_import?.includes(targetLayer)) {
+    const forbidden = new Set(rule.cannot_import);
+    const allowed = allLayers.filter(l => l !== sourceLayer && !forbidden.has(l));
+    if (allowed.length > 0) {
+      return (
+        `Instead of importing '${targetLayer}' directly, route through an allowed ` +
+        `intermediary layer: ${allowed.map(l => `'${l}'`).join(' or ')}.`
+      );
+    }
+    return `Remove the direct '${targetLayer}' import from '${sourceLayer}'.`;
+  }
+
+  if (rule?.can_only_import !== undefined) {
+    if (rule.can_only_import.length > 0) {
+      return (
+        `'${sourceLayer}' may only import from: ` +
+        `${rule.can_only_import.map(l => `'${l}'`).join(', ')}. ` +
+        `Route through one of those layers instead.`
+      );
+    }
+    return (
+      `'${sourceLayer}' is not permitted to import from any other layer. ` +
+      `Remove this import.`
+    );
+  }
+
+  return `Review the architecture rules and remove or redirect this import.`;
+}
+
+/**
  * Runs all rules defined in the context config against the scanned files.
  *
  * Features supported:
@@ -50,11 +93,13 @@ export function detectLayer(filePath: string, layers: string[]): string | null {
  *  - files           glob:      rule only applies to source files matching the pattern.
  *  - arch-ignore     inline comment on the import suppresses a specific violation.
  *  - strict          collects files that belong to no declared layer.
+ *  - generateFix     when true, populates the `fix` field on each Violation.
  */
 export function checkRules(
   scans: FileScan[],
   config: ContextConfig,
-  strict = false
+  strict = false,
+  generateFix = false,
 ): RuleCheckResult {
   const violations: Violation[] = [];
   const unclassifiedFiles: string[] = [];
@@ -106,14 +151,20 @@ export function checkRules(
       }
 
       if (violated) {
-        violations.push({
+        const violation: Violation = {
           file: scan.file,
           importPath: importInfo.importPath,
           rawSpecifier: importInfo.rawSpecifier,
           sourceLayer,
           targetLayer,
           rule: ruleString,
-        });
+        };
+
+        if (generateFix) {
+          violation.fix = buildFixSuggestion(sourceLayer, targetLayer, config);
+        }
+
+        violations.push(violation);
         violationsByLayer[sourceLayer] = (violationsByLayer[sourceLayer] ?? 0) + 1;
       }
     }

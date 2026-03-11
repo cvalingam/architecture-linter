@@ -2,7 +2,13 @@
   "name": "architecture-linter",
   "version": "0.1.0",
   "description": "A CLI tool that enforces architecture rules in TypeScript projects",
-  "keywords": ["architecture", "linter", "typescript", "dependency", "layers"],
+  "keywords": [
+    "architecture",
+    "linter",
+    "typescript",
+    "dependency",
+    "layers"
+  ],
   "license": "MIT",
   "bin": {
     "architecture-linter": "./dist/cli.js"
@@ -11,10 +17,14 @@
     "build": "tsc",
     "dev": "ts-node src/cli.ts",
     "start": "node dist/cli.js",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
   },
   "dependencies": {
     "chalk": "^4.1.2",
+    "chokidar": "^3.6.0",
     "commander": "^12.0.0",
     "fast-glob": "^3.3.2",
     "js-yaml": "^4.1.0",
@@ -22,9 +32,12 @@
     "ts-morph": "^22.0.0"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.0.0",
+    "jest": "^30.3.0",
     "rimraf": "^5.0.5",
+    "ts-jest": "^29.4.6",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.0"
   }

@@ -1,0 +1,10 @@
+﻿architecture:
+  layers:
+    - controller
+    - service
+    - repository
+
+rules:
+  controller:
+    can_only_import:
+      - service

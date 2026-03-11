@@ -5,6 +5,7 @@
  * Commands:
  *   scan   Scan the project for architecture violations
  *   init   Generate a starter .context.yml from the project's folder structure
+ *   ci     Generate a CI workflow file for architecture linting
  */
 
 import fs from 'fs';
@@ -15,6 +16,7 @@ import { findContextFile, loadContextConfig } from './contextParser';
 import { scanProject } from './dependencyScanner';
 import { explain } from './explainer';
 import { checkRules } from './ruleEngine';
+import { loadTsConfigAliases, mergeAliases } from './aliasResolver';
 import { RuleCheckResult, ScanOptions } from './types';
 
 const program = new Command();
@@ -35,6 +37,8 @@ program
   .option('-s, --strict', 'report files that do not belong to any declared layer', false)
   .option('-q, --quiet', 'suppress informational output; only print violations', false)
   .option('-e, --explain', 'print why/impact/fix explanation for each violation', false)
+  .option('-x, --fix', 'show a suggested fix for each violation', false)
+  .option('-w, --watch', 'watch for file changes and re-run the scan automatically', false)
   .action(async (options: {
     context?: string;
     project: string;
@@ -42,10 +46,19 @@ program
     strict: boolean;
     quiet: boolean;
     explain: boolean;
+    fix: boolean;
+    watch: boolean;
   }) => {
     const projectDir = path.resolve(options.project);
     const format = (options.format === 'json' ? 'json' : 'text') as 'text' | 'json';
-    const opts: ScanOptions = { format, strict: options.strict, quiet: options.quiet, explain: options.explain };
+    const opts: ScanOptions = {
+      format,
+      strict: options.strict,
+      quiet: options.quiet,
+      explain: options.explain,
+      fix: options.fix,
+      watch: options.watch,
+    };
 
     // Resolve config: explicit flag → auto-detect walking up from project dir → error
     let contextPath: string;
@@ -65,10 +78,7 @@ program
       contextPath = found;
     }
 
-    if (!opts.quiet && format === 'text') {
-      console.log(chalk.bold('Scanning project...\n'));
-    }
-
+    // Load config once (presets resolved inside loadContextConfig)
     let config;
     try {
       config = loadContextConfig(contextPath);
@@ -77,36 +87,85 @@ program
       process.exit(1);
     }
 
-    let scans;
-    try {
-      scans = await scanProject(projectDir, config.exclude ?? []);
-    } catch (err) {
-      console.error(chalk.red(`Error scanning project: ${(err as Error).message}`));
-      process.exit(1);
-    }
+    // Build alias map: tsconfig.json paths + manual aliases from .context.yml
+    const tsconfigAliases = loadTsConfigAliases(projectDir);
+    const aliases = mergeAliases(tsconfigAliases, config.aliases, projectDir);
 
-    if (scans.length === 0) {
-      if (format === 'json') {
-        console.log(
-          JSON.stringify({ filesScanned: 0, violations: [], unclassifiedFiles: [], violationsByLayer: {} }, null, 2)
-        );
-      } else {
-        console.log('No TypeScript files found in the specified directory.');
+    /** Execute one full scan pass and print results. Returns true if violations found. */
+    const runScan = async (): Promise<boolean> => {
+      let scans;
+      try {
+        scans = await scanProject(projectDir, config.exclude ?? [], aliases);
+      } catch (err) {
+        console.error(chalk.red(`Error scanning project: ${(err as Error).message}`));
+        return false;
       }
-      process.exit(0);
-    }
 
-    const result = checkRules(scans, config, opts.strict);
+      if (scans.length === 0) {
+        if (format === 'json') {
+          console.log(
+            JSON.stringify({ filesScanned: 0, violations: [], unclassifiedFiles: [], violationsByLayer: {} }, null, 2)
+          );
+        } else {
+          console.log('No TypeScript files found in the specified directory.');
+        }
+        return false;
+      }
 
-    if (format === 'json') {
-      printJson(result, scans.length, opts);
+      if (!opts.quiet && format === 'text') {
+        console.log(chalk.bold('Scanning project...\n'));
+      }
+
+      const result = checkRules(scans, config, opts.strict, opts.fix);
+
+      if (format === 'json') {
+        printJson(result, scans.length, opts);
+      } else {
+        printText(result, scans.length, opts);
+      }
+
+      return result.violations.length > 0 || (opts.strict && result.unclassifiedFiles.length > 0);
+    };
+
+    if (opts.watch) {
+      // Dynamic import keeps chokidar out of the startup path for non-watch runs
+      const chokidar = await import('chokidar');
+
+      console.log(chalk.dim('Watching for file changes… (press Ctrl+C to stop)\n'));
+
+      let running = false;
+
+      const onChange = async (changedPath?: string) => {
+        if (running) return; // debounce: skip if previous run still in progress
+        running = true;
+        if (format === 'text') {
+          process.stdout.write('\x1Bc'); // clear terminal
+          if (changedPath) {
+            console.log(chalk.dim(`Change detected: ${path.relative(projectDir, changedPath)}\n`));
+          }
+        }
+        await runScan();
+        running = false;
+      };
+
+      const watcher = chokidar.watch('**/*.ts', {
+        cwd: projectDir,
+        ignored: /(node_modules|dist|\.d\.ts$)/,
+        ignoreInitial: false,
+        awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      });
+
+      watcher.on('ready', () => onChange());
+      watcher.on('change', (p) => onChange(path.join(projectDir, p)));
+      watcher.on('add', (p) => onChange(path.join(projectDir, p)));
+      watcher.on('unlink', () => onChange());
+
+      // Keep process alive
+      process.stdin.resume();
     } else {
-      printText(result, scans.length, opts);
+      const hasIssues = await runScan();
+      process.exit(hasIssues ? 1 : 0);
     }
-
-    const hasIssues =
-      result.violations.length > 0 || (opts.strict && result.unclassifiedFiles.length > 0);
-    process.exit(hasIssues ? 1 : 0);
   });
 
 // ── init ──────────────────────────────────────────────────────────────────────
@@ -222,14 +281,95 @@ program
     console.log(`   ${chalk.bold('architecture-linter scan')}\n`);
   });
 
+// ── ci ────────────────────────────────────────────────────────────────────────
+
+const CI_PLATFORMS = ['github'] as const;
+type CiPlatform = typeof CI_PLATFORMS[number];
+
+program
+  .command('ci')
+  .description('Generate a CI workflow file that runs architecture-linter on every push/PR')
+  .option('--platform <platform>', 'CI platform to target: github', 'github')
+  .option('-p, --project <path>', 'root directory of the project', '.')
+  .action((options: { platform: string; project: string }) => {
+    const projectDir = path.resolve(options.project);
+    const platform = options.platform.toLowerCase() as CiPlatform;
+
+    if (!CI_PLATFORMS.includes(platform)) {
+      console.error(chalk.red(`Unknown platform: "${platform}". Supported platforms: ${CI_PLATFORMS.join(', ')}`));
+      process.exit(1);
+    }
+
+    if (platform === 'github') {
+      const workflowDir = path.join(projectDir, '.github', 'workflows');
+      const workflowPath = path.join(workflowDir, 'arch-lint.yml');
+
+      if (fs.existsSync(workflowPath)) {
+        console.error(chalk.yellow(`A workflow already exists at ${workflowPath}`));
+        process.exit(1);
+      }
+
+      fs.mkdirSync(workflowDir, { recursive: true });
+
+      const workflowContent = [
+        '# arch-lint.yml - generated by architecture-linter ci',
+        '# Runs architecture-linter on every push and pull request.',
+        '# See: https://github.com/cvalingam/architecture-linter',
+        '',
+        'name: Architecture Lint',
+        '',
+        'on:',
+        '  push:',
+        '    branches: ["**"]',
+        '  pull_request:',
+        '    branches: ["**"]',
+        '',
+        'jobs:',
+        '  arch-lint:',
+        '    runs-on: ubuntu-latest',
+        '',
+        '    steps:',
+        '      - name: Checkout repository',
+        '        uses: actions/checkout@v4',
+        '',
+        '      - name: Set up Node.js',
+        '        uses: actions/setup-node@v4',
+        '        with:',
+        '          node-version: "20"',
+        '          cache: "npm"',
+        '',
+        '      - name: Install dependencies',
+        '        run: npm ci',
+        '',
+        '      - name: Build',
+        '        run: npm run build',
+        '',
+        '      - name: Run architecture linter',
+        '        run: npx architecture-linter scan --strict',
+        '',
+      ].join('\n');
+
+      fs.writeFileSync(workflowPath, workflowContent, 'utf-8');
+      console.log(chalk.green(`\u2705 Created GitHub Actions workflow at: ${workflowPath}`));
+      console.log(`\n${chalk.dim('Commit and push this file to enable CI enforcement:')}`);
+      console.log(`   ${chalk.bold('git add .github/workflows/arch-lint.yml')}`);
+      console.log(`   ${chalk.bold('git commit -m "ci: add architecture-linter workflow"')}`);
+      console.log(`   ${chalk.bold('git push')}\n`);
+    }
+  });
+
 program.parse(process.argv);
 
 // ── output helpers ────────────────────────────────────────────────────────────
 
 function printJson(result: RuleCheckResult, filesScanned: number, opts: ScanOptions): void {
-  const violations = opts.explain
-    ? result.violations.map(v => ({ ...v, explanation: explain(v.sourceLayer, v.targetLayer, v.rule) }))
-    : result.violations;
+  const violations = result.violations.map(v => {
+    const entry: Record<string, unknown> = { ...v };
+    if (opts.explain) {
+      entry.explanation = explain(v.sourceLayer, v.targetLayer, v.rule);
+    }
+    return entry;
+  });
 
   console.log(
     JSON.stringify(
@@ -266,6 +406,12 @@ function printText(result: RuleCheckResult, filesScanned: number, opts: ScanOpti
       console.log();
       console.log(`   ${chalk.green.bold('✅ How to fix')}`);
       console.log(wordWrap(exp.fix, 72, '      '));
+    }
+
+    if (opts.fix && v.fix) {
+      console.log();
+      console.log(`   ${chalk.blue.bold('🔧 Suggested fix')}`);
+      console.log(wordWrap(v.fix, 72, '      '));
     }
 
     console.log();

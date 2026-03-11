@@ -2,17 +2,25 @@ import path from 'path';
 import fg from 'fast-glob';
 import { Project } from 'ts-morph';
 import { FileScan, ImportInfo } from './types';
+import { AliasMap, resolveAlias } from './aliasResolver';
 
 /**
  * Scans all TypeScript files in the given directory and returns the list of
- * imports found in each file. Only relative imports are tracked.
+ * imports found in each file.
+ *
+ * Relative imports are resolved to project-relative paths directly.
+ * Non-relative imports (bare specifiers) are checked against the provided
+ * alias map (auto-detected from tsconfig.json paths + manual .context.yml aliases).
+ * Imports that match no alias are skipped (treated as node_modules).
  *
  * @param projectDir  Absolute path to the project root.
  * @param exclude     Project-relative glob patterns for files to skip.
+ * @param aliases     Resolved alias map for path alias resolution.
  */
 export async function scanProject(
   projectDir: string,
-  exclude: string[] = []
+  exclude: string[] = [],
+  aliases: AliasMap = {}
 ): Promise<FileScan[]> {
   const absoluteFiles = await fg('**/*.ts', {
     cwd: projectDir,
@@ -44,13 +52,21 @@ export async function scanProject(
     for (const importDecl of sourceFile.getImportDeclarations()) {
       const rawSpecifier = importDecl.getModuleSpecifierValue();
 
-      // Only care about relative imports; skip node_modules / path aliases
-      if (!rawSpecifier.startsWith('.')) {
-        continue;
-      }
+      let importPath: string;
 
-      const resolvedAbsolute = path.resolve(fileDir, rawSpecifier);
-      const importPath = toForwardSlash(path.relative(projectDir, resolvedAbsolute));
+      if (rawSpecifier.startsWith('.')) {
+        // Relative import — resolve directly to a project-relative path
+        const resolvedAbsolute = path.resolve(fileDir, rawSpecifier);
+        importPath = toForwardSlash(path.relative(projectDir, resolvedAbsolute));
+      } else {
+        // Bare specifier — try to resolve via alias map
+        const resolved = resolveAlias(rawSpecifier, aliases, projectDir);
+        if (!resolved) {
+          // No matching alias → this is a node_modules package; skip
+          continue;
+        }
+        importPath = resolved;
+      }
 
       // Check the line immediately before this import for an arch-ignore comment.
       // Format: // arch-ignore: controller cannot import repository

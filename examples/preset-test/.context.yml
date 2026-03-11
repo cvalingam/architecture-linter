@@ -1,0 +1,11 @@
+﻿# Uses the nestjs preset - layers and base rules come from the preset
+extends: nestjs
+
+architecture:
+  layers:
+    - controller
+    - repository
+
+rules:
+  # user rule overrides preset: repository has no restrictions
+  repository: {}

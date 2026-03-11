@@ -2,12 +2,24 @@
  * Represents the parsed structure of a .context.yml file.
  */
 export interface ContextConfig {
+  /**
+   * A built-in preset name (or list of names) to extend.
+   * Supported values: 'nestjs', 'clean-architecture', 'hexagonal', 'nextjs'.
+   * User rules override preset rules.
+   */
+  extends?: string | string[];
   architecture: {
     layers: string[];
   };
   rules: Record<string, LayerRule>;
   /** Project-relative glob patterns for files to exclude from scanning. */
   exclude?: string[];
+  /**
+   * Manual path alias overrides. Keys are alias prefixes (e.g. '@repositories'),
+   * values are project-relative directories (e.g. 'src/repositories').
+   * These supplement aliases auto-detected from tsconfig.json compilerOptions.paths.
+   */
+  aliases?: Record<string, string>;
 }
 
 /**
@@ -55,6 +67,8 @@ export interface Violation {
   sourceLayer: string;
   targetLayer: string;
   rule: string;
+  /** Textual suggestion for resolving the violation (populated when --fix is enabled). */
+  fix?: string;
 }
 
 /** Options passed from the CLI to the scan pipeline. */
@@ -66,6 +80,10 @@ export interface ScanOptions {
   quiet: boolean;
   /** Print a why/impact/fix explanation for each violation. */
   explain: boolean;
+  /** Re-run the scan automatically when TypeScript files change. */
+  watch: boolean;
+  /** Show a suggested fix for each violation. */
+  fix: boolean;
 }
 
 /** Aggregated result returned by the rule engine. */

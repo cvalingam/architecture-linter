@@ -1,0 +1,6 @@
+﻿extends: nonexistent-preset
+architecture:
+  layers:
+    - controller
+rules:
+  controller: {}

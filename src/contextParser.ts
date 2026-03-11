@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { ContextConfig } from './types';
+import { resolvePresets } from './presets';
 
 /**
  * Walks up the directory tree from startDir looking for a .context.yml file.
@@ -44,15 +45,25 @@ export function loadContextConfig(contextPath: string): ContextConfig {
   const config = raw as ContextConfig;
 
   if (!config?.architecture?.layers || !Array.isArray(config.architecture.layers)) {
-    throw new Error(
-      'Invalid context file: "architecture.layers" must be a non-empty array.\n' +
-        'Example:\n\narchitecture:\n  layers:\n    - controller\n    - service\n    - repository'
-    );
+    // Allow missing/empty layers when a preset via `extends` will supply them
+    if (!config?.extends) {
+      throw new Error(
+        'Invalid context file: "architecture.layers" must be a non-empty array.\n' +
+          'Example:\n\narchitecture:\n  layers:\n    - controller\n    - service\n    - repository'
+      );
+    }
+    // Set empty array so resolvePresets can merge preset layers in
+    if (!config.architecture) config.architecture = { layers: [] };
+    if (!config.architecture.layers) config.architecture.layers = [];
   }
 
-  if (config.architecture.layers.length === 0) {
+  // Resolve any preset extensions declared via the `extends` field.
+  // This merges preset layers + rules BEFORE returning, with user config taking precedence.
+  const resolved = resolvePresets(config);
+
+  if (!resolved.architecture.layers || resolved.architecture.layers.length === 0) {
     throw new Error('Invalid context file: "architecture.layers" must contain at least one layer.');
   }
 
-  return config;
+  return resolved;
 }
