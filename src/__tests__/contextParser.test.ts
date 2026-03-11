@@ -113,6 +113,17 @@ rules: {}
     expect(cfg.architecture.layers.length).toBeGreaterThan(0);
   });
 
+  it('handles extends with architecture present but layers key absent', () => {
+    const p = writeConfig(dir, `
+extends: nestjs
+architecture:
+  custom_key: value
+rules: {}
+`);
+    const cfg = loadContextConfig(p);
+    expect(cfg.architecture.layers).toContain('controller');
+  });
+
   it('user layers are kept alongside preset layers', () => {
     const p = writeConfig(dir, `
 extends: nestjs

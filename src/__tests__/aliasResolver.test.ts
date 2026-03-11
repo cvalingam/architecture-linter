@@ -89,6 +89,26 @@ describe('loadTsConfigAliases', () => {
     const aliases = loadTsConfigAliases(dir);
     expect(aliases['@shared']).toBe(path.resolve(dir, 'src/shared'));
   });
+
+  it('returns empty map when tsconfig has no compilerOptions', () => {
+    fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({ include: ['src/**'] }));
+    expect(loadTsConfigAliases(dir)).toEqual({});
+  });
+
+  it('returns empty map when compilerOptions has no paths', () => {
+    fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { strict: true } }));
+    expect(loadTsConfigAliases(dir)).toEqual({});
+  });
+
+  it('skips alias entries with empty targets array', () => {
+    fs.writeFileSync(
+      path.join(dir, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { paths: { '@foo/*': [], '@bar/*': ['src/bar/*'] } } }),
+    );
+    const aliases = loadTsConfigAliases(dir);
+    expect(aliases['@foo']).toBeUndefined();
+    expect(aliases['@bar']).toBeDefined();
+  });
 });
 
 // ── resolveAlias ──────────────────────────────────────────────────────────────

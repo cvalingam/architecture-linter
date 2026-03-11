@@ -213,6 +213,40 @@ describe('checkRules - generateFix', () => {
     const result = checkRules(scan, canOnlyConfig, false, true);
     expect(result.violations[0].fix).toContain("'service'");
   });
+
+  it('fix says "not permitted" when can_only_import whitelist is empty', () => {
+    const strictConfig: ContextConfig = {
+      architecture: { layers: ['entity', 'service'] },
+      rules: { entity: { can_only_import: [] } },
+    };
+    const strictScan = [makeScan('entity/order.ts', [makeImport('entity/order.ts', 'services/svc.ts')])];
+    const result = checkRules(strictScan, strictConfig, false, true);
+    expect(result.violations[0].fix).toContain('not permitted');
+  });
+
+  it('fix says "Remove the direct" when no intermediary layers exist', () => {
+    const twoLayerConfig: ContextConfig = {
+      architecture: { layers: ['controller', 'repository'] },
+      rules: { controller: { cannot_import: ['repository'] } },
+    };
+    const twoLayerScan = [makeScan('controllers/a.ts', [makeImport('controllers/a.ts', 'repositories/r.ts')])];
+    const result = checkRules(twoLayerScan, twoLayerConfig, false, true);
+    expect(result.violations[0].fix).toContain('Remove the direct');
+  });
+});
+
+// ── checkRules - import to unknown layer ──────────────────────────────────────
+
+describe('checkRules - import to unknown layer', () => {
+  it('ignores imports whose target path matches no declared layer', () => {
+    const config: ContextConfig = {
+      architecture: { layers: ['controller', 'service'] },
+      rules: { controller: { cannot_import: ['service'] } },
+    };
+    // 'utils/helper' does not match any declared layer — should produce no violation
+    const scans = [makeScan('controllers/a.ts', [makeImport('controllers/a.ts', 'utils/helper.ts')])];
+    expect(checkRules(scans, config).violations).toHaveLength(0);
+  });
 });
 
 // ── checkRules - violationsByLayer ────────────────────────────────────────────

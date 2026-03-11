@@ -67,6 +67,7 @@ function buildFixSuggestion(
     return `Remove the direct '${targetLayer}' import from '${sourceLayer}'.`;
   }
 
+  /* istanbul ignore else -- violations are only created via cannot_import / can_only_import; this else is unreachable */
   if (rule?.can_only_import !== undefined) {
     if (rule.can_only_import.length > 0) {
       return (
@@ -81,6 +82,7 @@ function buildFixSuggestion(
     );
   }
 
+  /* istanbul ignore next -- defensive fallback; violations are only created via cannot_import / can_only_import paths */
   return `Review the architecture rules and remove or redirect this import.`;
 }
 
@@ -165,7 +167,8 @@ export function checkRules(
         }
 
         violations.push(violation);
-        violationsByLayer[sourceLayer] = (violationsByLayer[sourceLayer] ?? 0) + 1;
+        // sourceLayer is always in violationsByLayer (initialised above for every layer)
+        violationsByLayer[sourceLayer]++;
       }
     }
   }
