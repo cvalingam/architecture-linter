@@ -13,6 +13,7 @@ import chalk from 'chalk';
 import { Command } from 'commander';
 import { findContextFile, loadContextConfig } from './contextParser';
 import { scanProject } from './dependencyScanner';
+import { explain } from './explainer';
 import { checkRules } from './ruleEngine';
 import { RuleCheckResult, ScanOptions } from './types';
 
@@ -33,16 +34,18 @@ program
   .option('-f, --format <format>', 'output format: text or json', 'text')
   .option('-s, --strict', 'report files that do not belong to any declared layer', false)
   .option('-q, --quiet', 'suppress informational output; only print violations', false)
+  .option('-e, --explain', 'print why/impact/fix explanation for each violation', false)
   .action(async (options: {
     context?: string;
     project: string;
     format: string;
     strict: boolean;
     quiet: boolean;
+    explain: boolean;
   }) => {
     const projectDir = path.resolve(options.project);
     const format = (options.format === 'json' ? 'json' : 'text') as 'text' | 'json';
-    const opts: ScanOptions = { format, strict: options.strict, quiet: options.quiet };
+    const opts: ScanOptions = { format, strict: options.strict, quiet: options.quiet, explain: options.explain };
 
     // Resolve config: explicit flag → auto-detect walking up from project dir → error
     let contextPath: string;
@@ -96,7 +99,7 @@ program
     const result = checkRules(scans, config, opts.strict);
 
     if (format === 'json') {
-      printJson(result, scans.length);
+      printJson(result, scans.length, opts);
     } else {
       printText(result, scans.length, opts);
     }
@@ -223,12 +226,16 @@ program.parse(process.argv);
 
 // ── output helpers ────────────────────────────────────────────────────────────
 
-function printJson(result: RuleCheckResult, filesScanned: number): void {
+function printJson(result: RuleCheckResult, filesScanned: number, opts: ScanOptions): void {
+  const violations = opts.explain
+    ? result.violations.map(v => ({ ...v, explanation: explain(v.sourceLayer, v.targetLayer, v.rule) }))
+    : result.violations;
+
   console.log(
     JSON.stringify(
       {
         filesScanned,
-        violations: result.violations,
+        violations,
         unclassifiedFiles: result.unclassifiedFiles,
         violationsByLayer: result.violationsByLayer,
       },
@@ -247,6 +254,20 @@ function printText(result: RuleCheckResult, filesScanned: number, opts: ScanOpti
     console.log(`   ${chalk.bold('File:')}   ${chalk.yellow(v.file)}`);
     console.log(`   ${chalk.bold('Import:')} ${v.importPath}`);
     console.log(`   ${chalk.bold('Rule:')}   ${v.rule}`);
+
+    if (opts.explain) {
+      const exp = explain(v.sourceLayer, v.targetLayer, v.rule);
+      console.log();
+      console.log(`   ${chalk.cyan.bold('💡 Why this matters')}`);
+      console.log(wordWrap(exp.why, 72, '      '));
+      console.log();
+      console.log(`   ${chalk.yellow.bold('⚡ Impact')}`);
+      console.log(wordWrap(exp.impact, 72, '      '));
+      console.log();
+      console.log(`   ${chalk.green.bold('✅ How to fix')}`);
+      console.log(wordWrap(exp.fix, 72, '      '));
+    }
+
     console.log();
   }
 
@@ -280,3 +301,24 @@ function printText(result: RuleCheckResult, filesScanned: number, opts: ScanOpti
   }
 }
 
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Wraps `text` at `maxWidth` characters, prefixing every line with `indent`.
+ */
+function wordWrap(text: string, maxWidth: number, indent: string): string {
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let current = indent;
+
+  for (const word of words) {
+    if (current.length + word.length + 1 > maxWidth && current.trim().length > 0) {
+      lines.push(current);
+      current = indent + word;
+    } else {
+      current = current.trim().length === 0 ? indent + word : current + ' ' + word;
+    }
+  }
+  if (current.trim().length > 0) lines.push(current);
+  return lines.join('\n');
+}

@@ -64,6 +64,8 @@ export interface ScanOptions {
   strict: boolean;
   /** Suppress informational output; only print violations. */
   quiet: boolean;
+  /** Print a why/impact/fix explanation for each violation. */
+  explain: boolean;
 }
 
 /** Aggregated result returned by the rule engine. */
