@@ -73,6 +73,40 @@ describe('calculateScore', () => {
       expect(s.grade).toBe('A');
     });
 
+    it('assigns grade B for score >= 75', () => {
+      // violation score: 0 violations / 4 imports → 60 pts
+      // coverage score: 1 classified / 1 file → 25 pts
+      // rule completeness: 1/2 layers with rules → ~7 pts  (total ~92 → A, bump to B range)
+      // Use partial violation rate to land in B range
+      const scans = [makeScan('controllers/a.ts', 8)];
+      const result = makeResult(1); // 1/8 violation rate → 52.5 pts violation component → rounds to B
+      const config = makeConfig(['controller', 'service'], { controller: { cannot_import: ['service'] } });
+      const s = calculateScore(scans, result, config);
+      expect(s.grade).toBe('B');
+    });
+
+    it('assigns grade C for score >= 60', () => {
+      // violation score: 3/6 imports violated → 30 pts
+      // coverage score: 1/1 files classified → 25 pts
+      // rule completeness: 1/2 layers → 7.5 pts  → total ~62
+      const scans = [makeScan('controllers/a.ts', 6)];
+      const result = makeResult(3);
+      const config = makeConfig(['controller', 'service'], { controller: { cannot_import: ['service'] } });
+      const s = calculateScore(scans, result, config);
+      expect(s.grade).toBe('C');
+    });
+
+    it('assigns grade D for score >= 40', () => {
+      // violation score: 5/6 imports violated → ~10 pts
+      // coverage score: 1/1 files classified → 25 pts
+      // rule completeness: 1/2 layers → 7.5 pts  → total ~42
+      const scans = [makeScan('controllers/a.ts', 6)];
+      const result = makeResult(5);
+      const config = makeConfig(['controller', 'service'], { controller: { cannot_import: ['service'] } });
+      const s = calculateScore(scans, result, config);
+      expect(s.grade).toBe('D');
+    });
+
     it('assigns grade F for score < 40', () => {
       // all imports are violations, no rules, all files unclassified
       const scans = [makeScan('random/a.ts', 5)];
