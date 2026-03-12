@@ -16,6 +16,7 @@ import { findContextFile, loadContextConfig } from './contextParser';
 import { scanProject } from './dependencyScanner';
 import { explain } from './explainer';
 import { checkRules } from './ruleEngine';
+import { calculateScore } from './scorer';
 import { loadTsConfigAliases, mergeAliases } from './aliasResolver';
 import { RuleCheckResult, ScanOptions } from './types';
 
@@ -119,7 +120,7 @@ program
       const result = checkRules(scans, config, opts.strict, opts.fix);
 
       if (format === 'json') {
-        printJson(result, scans.length, opts);
+        printJson(result, scans.length, opts, scans, config);
       } else {
         printText(result, scans.length, opts);
       }
@@ -358,11 +359,66 @@ program
     }
   });
 
+// ── score ──────────────────────────────────────────────────────────────────────
+
+program
+  .command('score')
+  .description('Calculate an architecture health score (0–100) for the project')
+  .option('-c, --context <path>', 'path to the .context.yml config file (auto-detected if omitted)')
+  .option('-p, --project <path>', 'root directory of the project to scan', '.')
+  .option('-f, --format <format>', 'output format: text or json', 'text')
+  .action(async (options: { context?: string; project: string; format: string }) => {
+    const projectDir = path.resolve(options.project);
+    const format = options.format === 'json' ? 'json' : 'text';
+
+    let contextPath: string;
+    if (options.context) {
+      contextPath = path.resolve(options.context);
+    } else {
+      const found = findContextFile(projectDir);
+      if (!found) {
+        console.error(chalk.red('Error: No .context.yml found. Run "architecture-linter init" to generate one.'));
+        process.exit(1);
+      }
+      contextPath = found;
+    }
+
+    let config;
+    try {
+      config = loadContextConfig(contextPath);
+    } catch (err) {
+      console.error(chalk.red(`Error loading config: ${(err as Error).message}`));
+      process.exit(1);
+    }
+
+    const tsconfigAliases = loadTsConfigAliases(projectDir);
+    const aliases = mergeAliases(tsconfigAliases, config.aliases, projectDir);
+
+    let scans;
+    try {
+      scans = await scanProject(projectDir, config.exclude ?? [], aliases);
+    } catch (err) {
+      console.error(chalk.red(`Error scanning project: ${(err as Error).message}`));
+      process.exit(1);
+    }
+
+    const result = checkRules(scans, config, true, false);
+    const archScore = calculateScore(scans, result, config);
+
+    if (format === 'json') {
+      console.log(JSON.stringify(archScore, null, 2));
+    } else {
+      printScoreText(archScore);
+    }
+
+    process.exit(0);
+  });
+
 program.parse(process.argv);
 
 // ── output helpers ────────────────────────────────────────────────────────────
 
-function printJson(result: RuleCheckResult, filesScanned: number, opts: ScanOptions): void {
+function printJson(result: RuleCheckResult, filesScanned: number, opts: ScanOptions, scans?: import('./types').FileScan[], config?: import('./types').ContextConfig): void {
   const violations = result.violations.map(v => {
     const entry: Record<string, unknown> = { ...v };
     if (opts.explain) {
@@ -378,6 +434,7 @@ function printJson(result: RuleCheckResult, filesScanned: number, opts: ScanOpti
         violations,
         unclassifiedFiles: result.unclassifiedFiles,
         violationsByLayer: result.violationsByLayer,
+        ...(scans && config ? { score: calculateScore(scans, result, config) } : {}),
       },
       null,
       2
@@ -448,6 +505,33 @@ function printText(result: RuleCheckResult, filesScanned: number, opts: ScanOpti
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+function printScoreText(s: import('./types').ArchScore): void {
+  const gradeColour = s.grade === 'A' ? chalk.green
+    : s.grade === 'B' ? chalk.cyan
+    : s.grade === 'C' ? chalk.yellow
+    : chalk.red;
+
+  const bar = '█'.repeat(Math.round(s.score / 5)) + '░'.repeat(20 - Math.round(s.score / 5));
+
+  console.log();
+  console.log(chalk.bold('Architecture Health Score'));
+  console.log();
+  console.log(`  ${gradeColour.bold(`${s.score}/100`)}  Grade: ${gradeColour.bold(s.grade)}  ${gradeColour(bar)}`);
+  console.log();
+  console.log(chalk.bold('  Breakdown:'));
+  console.log(`    Violation density   ${String(s.breakdown.violations).padStart(3)}/60  pts`);
+  console.log(`    Layer coverage      ${String(s.breakdown.coverage).padStart(3)}/25  pts`);
+  console.log(`    Rule completeness   ${String(s.breakdown.ruleCompleteness).padStart(3)}/15  pts`);
+  console.log();
+  console.log(chalk.bold('  Stats:'));
+  console.log(`    Files scanned:      ${s.stats.filesScanned}`);
+  console.log(`    Total imports:      ${s.stats.totalImports}`);
+  console.log(`    Violations:         ${s.stats.violationCount}`);
+  console.log(`    Classified files:   ${s.stats.classifiedFiles}/${s.stats.filesScanned}`);
+  console.log(`    Layers with rules:  ${s.stats.layersWithRules}/${s.stats.totalLayers}`);
+  console.log();
+}
 
 /**
  * Wraps `text` at `maxWidth` characters, prefixing every line with `indent`.

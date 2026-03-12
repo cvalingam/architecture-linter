@@ -71,6 +71,36 @@ export interface Violation {
   fix?: string;
 }
 
+/**
+ * Architecture health score returned by the `score` command and included in
+ * the `scan --format json` output.
+ */
+export interface ArchScore {
+  /** Overall score 0–100. */
+  score: number;
+  /** Letter grade derived from the score. */
+  grade: 'A' | 'B' | 'C' | 'D' | 'F';
+  /** Sub-scores that add up to the total. */
+  breakdown: {
+    /** Violation density contribution (max 60). */
+    violations: number;
+    /** Layer coverage contribution (max 25). */
+    coverage: number;
+    /** Rule completeness contribution (max 15). */
+    ruleCompleteness: number;
+  };
+  /** Raw statistics used to derive the score. */
+  stats: {
+    filesScanned: number;
+    totalImports: number;
+    violationCount: number;
+    classifiedFiles: number;
+    unclassifiedFiles: number;
+    layersWithRules: number;
+    totalLayers: number;
+  };
+}
+
 /** Options passed from the CLI to the scan pipeline. */
 export interface ScanOptions {
   format: 'text' | 'json';

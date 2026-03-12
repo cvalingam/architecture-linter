@@ -309,6 +309,53 @@ architecture-linter ci
 
 Fails safely if the workflow file already exists.
 
+### `score`
+
+```
+architecture-linter score [options]
+
+Options:
+  -c, --context <path>   Path to the .context.yml config file (auto-detected)
+  -p, --project <path>   Root directory of the project to scan  (default: .)
+  -f, --format <format>  Output format: text or json              (default: text)
+```
+
+Calculates an **architecture health score from 0 to 100** based on three weighted components:
+
+| Component | Max pts | What it measures |
+|---|---|---|
+| Violation density | 60 | How few import violations exist relative to total imports |
+| Layer coverage | 25 | What fraction of files belong to a declared layer |
+| Rule completeness | 15 | What fraction of layers have at least one rule defined |
+
+**Grades:** A (90–100) · B (75–89) · C (60–74) · D (40–59) · F (0–39)
+
+```bash
+npx architecture-linter score
+```
+
+Example output:
+
+```
+Architecture Health Score
+
+  87/100  Grade: B  █████████████████░░░
+
+  Breakdown:
+    Violation density    52/60  pts
+    Layer coverage       25/25  pts
+    Rule completeness    10/15  pts
+
+  Stats:
+    Files scanned:       24
+    Total imports:       87
+    Violations:          4
+    Classified files:    24/24
+    Layers with rules:   2/3
+```
+
+The score is also included in `scan --format json` output under the `score` key.
+
 ### Exit codes
 
 | Code | Meaning |
