@@ -2,7 +2,7 @@
   "name": "architecture-linter-vscode",
   "displayName": "Architecture Linter",
   "description": "Enforce architectural layer rules in TypeScript projects — inline diagnostics, fix hints, and real-time feedback on every save.",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "publisher": "cvalingam",
   "repository": {
     "type": "git",
