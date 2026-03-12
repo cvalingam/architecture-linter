@@ -68,6 +68,7 @@ jobs:
         run: |
           cd vscode-extension
           npm ci
+          npm run compile
           npx vsce publish --no-dependencies
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
