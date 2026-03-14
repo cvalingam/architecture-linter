@@ -38,6 +38,7 @@ function makeResult(
     })),
     unclassifiedFiles,
     violationsByLayer: {},
+    circularDeps: [],
   };
 }
 

@@ -392,3 +392,170 @@ describe('init command', () => {
     expect(content).toContain('layers:');
   });
 });
+
+// ── scan --format sarif ───────────────────────────────────────────────────────
+
+describe('scan --format sarif', () => {
+  it('outputs valid JSON with SARIF $schema', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'sarif']);
+    expect(() => JSON.parse(r.stdout)).not.toThrow();
+    const doc = JSON.parse(r.stdout);
+    expect(doc.$schema).toContain('sarif');
+  });
+
+  it('outputs SARIF version 2.1.0', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'sarif']);
+    const doc = JSON.parse(r.stdout);
+    expect(doc.version).toBe('2.1.0');
+  });
+
+  it('contains a runs array with at least one entry', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'sarif']);
+    const doc = JSON.parse(r.stdout);
+    expect(Array.isArray(doc.runs)).toBe(true);
+    expect(doc.runs.length).toBeGreaterThan(0);
+  });
+
+  it('tool driver name is architecture-linter', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'sarif']);
+    const doc = JSON.parse(r.stdout);
+    expect(doc.runs[0].tool.driver.name).toBe('architecture-linter');
+  });
+
+  it('violations are reported as SARIF results', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'sarif']);
+    const doc = JSON.parse(r.stdout);
+    expect(doc.runs[0].results.length).toBeGreaterThan(0);
+  });
+
+  it('exits with code 1 when violations found', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'sarif']);
+    expect(r.status).toBe(1);
+  });
+});
+
+// ── scan --baseline (ratchet mode) ────────────────────────────────────────────
+
+describe('scan --baseline', () => {
+  let dir: string;
+  beforeEach(() => { dir = tmpDir(); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  function makeViolatingProject(d: string): void {
+    fs.mkdirSync(path.join(d, 'controllers'), { recursive: true });
+    fs.mkdirSync(path.join(d, 'services'), { recursive: true });
+    // ctrl.ts (controllers layer) imports from services — violates cannot_import rule
+    fs.writeFileSync(
+      path.join(d, 'controllers', 'ctrl.ts'),
+      "import '../services/svc';\n"
+    );
+    fs.writeFileSync(path.join(d, 'services', 'svc.ts'), 'export class S {}');
+    fs.writeFileSync(
+      path.join(d, '.context.yml'),
+      [
+        'architecture:',
+        '  layers:',
+        '    - controllers',
+        '    - services',
+        'rules:',
+        '  controllers:',
+        '    cannot_import:',
+        '      - services',
+      ].join('\n')
+    );
+  }
+
+  it('creates a baseline file on first --update-baseline run', () => {
+    makeViolatingProject(dir);
+    run(['scan', '-p', dir, '--baseline', '--update-baseline']);
+    const bFile = path.join(dir, '.arch-baseline.json');
+    expect(fs.existsSync(bFile)).toBe(true);
+  });
+
+  it('baseline file contains violationCount', () => {
+    makeViolatingProject(dir);
+    run(['scan', '-p', dir, '--baseline', '--update-baseline']);
+    const data = JSON.parse(fs.readFileSync(path.join(dir, '.arch-baseline.json'), 'utf-8'));
+    expect(typeof data.violationCount).toBe('number');
+  });
+
+  it('exits 0 when violation count matches baseline', () => {
+    makeViolatingProject(dir);
+    // Save baseline
+    run(['scan', '-p', dir, '--baseline', '--update-baseline']);
+    // Re-run against same baseline — count unchanged → exit 0
+    const r = run(['scan', '-p', dir, '--baseline']);
+    expect(r.status).toBe(0);
+  });
+
+  it('exits 1 when violation count exceeds baseline', () => {
+    makeViolatingProject(dir);
+    // Save baseline with 0 (clean) violations by writing a baseline manually
+    const bFile = path.join(dir, '.arch-baseline.json');
+    fs.writeFileSync(bFile, JSON.stringify({ violationCount: 0, timestamp: new Date().toISOString(), version: '0.1.5' }));
+    // Now run should find violations > baseline → exit 1
+    const r = run(['scan', '-p', dir, '--baseline']);
+    expect(r.status).toBe(1);
+  });
+});
+
+// ── scan --detect-circular ────────────────────────────────────────────────────
+
+describe('scan --detect-circular', () => {
+  it('exits 0 and no circular output when no deps exist', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--detect-circular']);
+    // No circular dep message expected; exit code determined by violations
+    expect(r.stdout).not.toContain('Circular');
+  });
+
+  it('circular JSON key is present in --format json output', () => {
+    const r = run([
+      'scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT,
+      '--detect-circular', '--format', 'json',
+    ]);
+    const out = JSON.parse(r.stdout);
+    expect(Object.prototype.hasOwnProperty.call(out, 'circularDeps')).toBe(true);
+    expect(Array.isArray(out.circularDeps)).toBe(true);
+  });
+});
+
+// ── badge command ─────────────────────────────────────────────────────────────
+
+describe('badge command', () => {
+  it('prints a shields.io URL to stdout', () => {
+    const r = run(['badge', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('img.shields.io/badge');
+  });
+
+  it('URL contains arch%20score', () => {
+    const r = run(['badge', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT]);
+    expect(r.stdout).toContain('arch%20score');
+  });
+
+  it('--format markdown wraps URL in Markdown image syntax', () => {
+    const r = run(['badge', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'markdown']);
+    // The markdown badge starts with ![ (any alt text)
+    expect(r.stdout.trim()).toMatch(/^!\[/);
+  });
+
+  it('--output writes badge URL to file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'badge-'));
+    try {
+      const outFile = path.join(dir, 'badge.txt');
+      const r = run(['badge', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--output', outFile]);
+      expect(r.status).toBe(0);
+      expect(fs.existsSync(outFile)).toBe(true);
+      expect(fs.readFileSync(outFile, 'utf-8')).toContain('img.shields.io/badge');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('badge URL contains a colour string', () => {
+    const r = run(['badge', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT]);
+    const colours = ['brightgreen', 'green', 'yellow', 'orange', 'red'];
+    const hasColour = colours.some(c => r.stdout.includes(c));
+    expect(hasColour).toBe(true);
+  });
+});

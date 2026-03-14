@@ -173,5 +173,5 @@ export function checkRules(
     }
   }
 
-  return { violations, unclassifiedFiles, violationsByLayer };
+  return { violations, unclassifiedFiles, violationsByLayer, circularDeps: [] };
 }

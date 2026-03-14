@@ -6,6 +6,8 @@
  *   scan   Scan the project for architecture violations
  *   init   Generate a starter .context.yml from the project's folder structure
  *   ci     Generate a CI workflow file for architecture linting
+ *   score  Calculate architecture health score
+ *   badge  Generate a shields.io badge for the health score
  */
 
 import fs from 'fs';
@@ -17,15 +19,29 @@ import { scanProject } from './dependencyScanner';
 import { explain } from './explainer';
 import { checkRules } from './ruleEngine';
 import { calculateScore } from './scorer';
+import { toSarif } from './sarifFormatter';
+import { detectCircularDependencies } from './circularDetector';
+import { resolveBaselinePath, loadBaseline, saveBaseline, hasRatchetFailed } from './baseline';
+import { discoverWorkspacePackages } from './monorepo';
 import { loadTsConfigAliases, mergeAliases } from './aliasResolver';
-import { RuleCheckResult, ScanOptions } from './types';
+import { CircularDep, RuleCheckResult, ScanOptions } from './types';
+
+// Tool version — kept in sync with package.json at build time via the version() call below.
+const TOOL_VERSION: string = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return (require('../package.json') as { version: string }).version;
+  } catch {
+    return '0.0.0';
+  }
+})();
 
 const program = new Command();
 
 program
   .name('architecture-linter')
   .description('Enforce architecture rules in TypeScript projects')
-  .version('0.1.0');
+  .version(TOOL_VERSION);
 
 // ── scan ──────────────────────────────────────────────────────────────────────
 
@@ -34,12 +50,16 @@ program
   .description('Scan the project for architecture violations')
   .option('-c, --context <path>', 'path to the .context.yml config file (auto-detected if omitted)')
   .option('-p, --project <path>', 'root directory of the project to scan', '.')
-  .option('-f, --format <format>', 'output format: text or json', 'text')
+  .option('-f, --format <format>', 'output format: text, json, or sarif', 'text')
   .option('-s, --strict', 'report files that do not belong to any declared layer', false)
   .option('-q, --quiet', 'suppress informational output; only print violations', false)
   .option('-e, --explain', 'print why/impact/fix explanation for each violation', false)
   .option('-x, --fix', 'show a suggested fix for each violation', false)
   .option('-w, --watch', 'watch for file changes and re-run the scan automatically', false)
+  .option('--baseline [path]', 'enable ratchet mode: fail only when violations increase beyond the saved baseline')
+  .option('--update-baseline', 'write current violation count to the baseline file and exit 0', false)
+  .option('--detect-circular', 'detect circular dependencies between layers', false)
+  .option('--monorepo', 'scan all workspace packages defined in package.json workspaces', false)
   .action(async (options: {
     context?: string;
     project: string;
@@ -49,9 +69,16 @@ program
     explain: boolean;
     fix: boolean;
     watch: boolean;
+    baseline?: string | boolean;
+    updateBaseline: boolean;
+    detectCircular: boolean;
+    monorepo: boolean;
   }) => {
     const projectDir = path.resolve(options.project);
-    const format = (options.format === 'json' ? 'json' : 'text') as 'text' | 'json';
+    const rawFormat = options.format.toLowerCase();
+    const format = (rawFormat === 'json' ? 'json' : rawFormat === 'sarif' ? 'sarif' : 'text') as ScanOptions['format'];
+    // --baseline alone (no value) defaults to true; coerce to undefined so resolveBaselinePath uses default filename
+    const baselineArg = options.baseline === true ? undefined : options.baseline as string | undefined;
     const opts: ScanOptions = {
       format,
       strict: options.strict,
@@ -59,6 +86,10 @@ program
       explain: options.explain,
       fix: options.fix,
       watch: options.watch,
+      useBaseline: options.baseline !== undefined,
+      baseline: baselineArg,
+      updateBaseline: options.updateBaseline,
+      detectCircular: options.detectCircular,
     };
 
     // Resolve config: explicit flag → auto-detect walking up from project dir → error
@@ -92,11 +123,20 @@ program
     const tsconfigAliases = loadTsConfigAliases(projectDir);
     const aliases = mergeAliases(tsconfigAliases, config.aliases, projectDir);
 
-    /** Execute one full scan pass and print results. Returns true if violations found. */
-    const runScan = async (): Promise<boolean> => {
+    /**
+     * Execute one full scan pass for a single package.
+     * `pkgLabel` is shown as a prefix in monorepo mode.
+     * Returns true if the result should cause CI to exit 1.
+     */
+    const runPackageScan = async (
+      scanDir: string,
+      pkgConfig: ReturnType<typeof loadContextConfig>,
+      pkgAliases: ReturnType<typeof mergeAliases>,
+      pkgLabel?: string,
+    ): Promise<boolean> => {
       let scans;
       try {
-        scans = await scanProject(projectDir, config.exclude ?? [], aliases);
+        scans = await scanProject(scanDir, pkgConfig.exclude ?? [], pkgAliases);
       } catch (err) {
         console.error(chalk.red(`Error scanning project: ${(err as Error).message}`));
         return false;
@@ -105,47 +145,123 @@ program
       if (scans.length === 0) {
         if (format === 'json') {
           console.log(
-            JSON.stringify({ filesScanned: 0, violations: [], unclassifiedFiles: [], violationsByLayer: {} }, null, 2)
+            JSON.stringify({ filesScanned: 0, violations: [], unclassifiedFiles: [], violationsByLayer: {}, circularDeps: [] }, null, 2)
           );
-        } else {
-          console.log('No TypeScript files found in the specified directory.');
+        } else if (format === 'text') {
+          console.log(pkgLabel
+            ? `[${pkgLabel}] No TypeScript files found.`
+            : 'No TypeScript files found in the specified directory.');
         }
         return false;
       }
 
       if (!opts.quiet && format === 'text') {
-        console.log(chalk.bold('Scanning project...\n'));
+        console.log(chalk.bold(pkgLabel ? `Scanning ${pkgLabel}...\n` : 'Scanning project...\n'));
       }
 
-      const result = checkRules(scans, config, opts.strict, opts.fix);
+      const result = checkRules(scans, pkgConfig, opts.strict, opts.fix);
 
-      if (format === 'json') {
-        printJson(result, scans.length, opts, scans, config);
+      // Circular detection (mutates circularDeps on the result object)
+      if (opts.detectCircular) {
+        result.circularDeps = detectCircularDependencies(scans, pkgConfig.architecture.layers);
+      }
+
+      // Output
+      if (format === 'sarif') {
+        console.log(JSON.stringify(toSarif(result.violations, TOOL_VERSION), null, 2));
+      } else if (format === 'json') {
+        printJson(result, scans.length, opts, scans, pkgConfig);
       } else {
         printText(result, scans.length, opts);
+        if (opts.detectCircular && result.circularDeps.length > 0) {
+          printCircularDeps(result.circularDeps);
+        }
       }
 
-      return result.violations.length > 0 || (opts.strict && result.unclassifiedFiles.length > 0);
+      const violationCount = result.violations.length;
+      const hasUnclassified = opts.strict && result.unclassifiedFiles.length > 0;
+      const hasCircular = opts.detectCircular && result.circularDeps.length > 0;
+
+      // ── Baseline / ratchet mode ────────────────────────────────────────────
+      if (opts.useBaseline || opts.updateBaseline) {
+        const bPath = resolveBaselinePath(opts.baseline, scanDir);
+        const existing = loadBaseline(bPath);
+
+        if (opts.updateBaseline || !existing) {
+          saveBaseline(bPath, violationCount, TOOL_VERSION);
+          if (!opts.quiet && format === 'text') {
+            const label = pkgLabel ? `[${pkgLabel}] ` : '';
+            console.log(chalk.dim(`${label}Baseline saved: ${violationCount} violation(s) → ${bPath}`));
+          }
+          return false;
+        }
+
+        if (hasRatchetFailed(violationCount, existing)) {
+          if (!opts.quiet && format === 'text') {
+            console.log(chalk.red(
+              `Ratchet failed: ${violationCount} violations (was ${existing.violationCount} in baseline)`
+            ));
+          }
+          return true;
+        }
+
+        if (!opts.quiet && format === 'text') {
+          const delta = existing.violationCount - violationCount;
+          const note = delta > 0 ? `↓${delta} fewer than baseline` : 'same as baseline';
+          console.log(chalk.green(`Ratchet passed: ${violationCount} violations (${note})`));
+        }
+        return false;
+      }
+
+      return violationCount > 0 || hasUnclassified || hasCircular;
     };
 
+    // ── Monorepo mode ─────────────────────────────────────────────────────────
+    if (options.monorepo) {
+      const packages = discoverWorkspacePackages(projectDir);
+      if (packages.length === 0) {
+        console.error(chalk.yellow(
+          'No workspace packages found. Make sure your root package.json has a "workspaces" field.'
+        ));
+        process.exit(1);
+      }
+
+      let anyIssues = false;
+      for (const pkg of packages) {
+        const pkgContextFile = findContextFile(pkg.dir) ?? contextPath;
+        let pkgConfig;
+        try {
+          pkgConfig = loadContextConfig(pkgContextFile);
+        } catch (err) {
+          console.error(chalk.red(`[${pkg.name}] Error loading config: ${(err as Error).message}`));
+          anyIssues = true;
+          continue;
+        }
+        const pkgTscAliases = loadTsConfigAliases(pkg.dir);
+        const pkgAliases = mergeAliases(pkgTscAliases, pkgConfig.aliases, pkg.dir);
+        const pkgIssues = await runPackageScan(pkg.dir, pkgConfig, pkgAliases, pkg.name);
+        if (pkgIssues) anyIssues = true;
+      }
+      process.exit(anyIssues ? 1 : 0);
+      return;
+    }
+
+    // ── Single-package scan ───────────────────────────────────────────────────
     if (opts.watch) {
-      // Dynamic import keeps chokidar out of the startup path for non-watch runs
       const chokidar = await import('chokidar');
-
       console.log(chalk.dim('Watching for file changes… (press Ctrl+C to stop)\n'));
-
       let running = false;
 
       const onChange = async (changedPath?: string) => {
-        if (running) return; // debounce: skip if previous run still in progress
+        if (running) return;
         running = true;
         if (format === 'text') {
-          process.stdout.write('\x1Bc'); // clear terminal
+          process.stdout.write('\x1Bc');
           if (changedPath) {
             console.log(chalk.dim(`Change detected: ${path.relative(projectDir, changedPath)}\n`));
           }
         }
-        await runScan();
+        await runPackageScan(projectDir, config, aliases);
         running = false;
       };
 
@@ -160,11 +276,9 @@ program
       watcher.on('change', (p) => onChange(path.join(projectDir, p)));
       watcher.on('add', (p) => onChange(path.join(projectDir, p)));
       watcher.on('unlink', () => onChange());
-
-      // Keep process alive
       process.stdin.resume();
     } else {
-      const hasIssues = await runScan();
+      const hasIssues = await runPackageScan(projectDir, config, aliases);
       process.exit(hasIssues ? 1 : 0);
     }
   });
@@ -414,6 +528,83 @@ program
     process.exit(0);
   });
 
+// ── badge ─────────────────────────────────────────────────────────────────────
+
+const BADGE_COLOURS: Record<string, string> = {
+  A: 'brightgreen',
+  B: 'green',
+  C: 'yellow',
+  D: 'orange',
+  F: 'red',
+};
+
+program
+  .command('badge')
+  .description('Generate a shields.io badge URL for the architecture health score')
+  .option('-c, --context <path>', 'path to the .context.yml config file (auto-detected if omitted)')
+  .option('-p, --project <path>', 'root directory of the project to scan', '.')
+  .option('-f, --format <format>', 'output format: url or markdown', 'url')
+  .option('-o, --output <path>', 'write output to a file instead of stdout')
+  .action(async (options: { context?: string; project: string; format: string; output?: string }) => {
+    const projectDir = path.resolve(options.project);
+
+    let contextPath: string;
+    if (options.context) {
+      contextPath = path.resolve(options.context);
+    } else {
+      const found = findContextFile(projectDir);
+      if (!found) {
+        console.error(chalk.red('Error: No .context.yml found. Run "architecture-linter init" to generate one.'));
+        process.exit(1);
+      }
+      contextPath = found;
+    }
+
+    let config;
+    try {
+      config = loadContextConfig(contextPath);
+    } catch (err) {
+      console.error(chalk.red(`Error loading config: ${(err as Error).message}`));
+      process.exit(1);
+    }
+
+    const tsconfigAliases = loadTsConfigAliases(projectDir);
+    const aliases = mergeAliases(tsconfigAliases, config.aliases, projectDir);
+
+    let scans;
+    try {
+      scans = await scanProject(projectDir, config.exclude ?? [], aliases);
+    } catch (err) {
+      console.error(chalk.red(`Error scanning project: ${(err as Error).message}`));
+      process.exit(1);
+    }
+
+    const result = checkRules(scans, config, true, false);
+    const archScore = calculateScore(scans, result, config);
+
+    const colour = BADGE_COLOURS[archScore.grade] ?? 'lightgrey';
+    const label = encodeURIComponent('arch score');
+    const message = encodeURIComponent(`${archScore.grade} (${archScore.score}/100)`);
+    const url = `https://img.shields.io/badge/${label}-${message}-${colour}`;
+
+    const fmt = options.format.toLowerCase();
+    let output: string;
+    if (fmt === 'markdown') {
+      output = `![Architecture Score](${url})`;
+    } else {
+      output = url;
+    }
+
+    if (options.output) {
+      fs.writeFileSync(path.resolve(options.output), output + '\n', 'utf-8');
+      console.log(chalk.green(`Badge written to: ${options.output}`));
+    } else {
+      console.log(output);
+    }
+
+    process.exit(0);
+  });
+
 program.parse(process.argv);
 
 // ── output helpers ────────────────────────────────────────────────────────────
@@ -434,6 +625,7 @@ function printJson(result: RuleCheckResult, filesScanned: number, opts: ScanOpti
         violations,
         unclassifiedFiles: result.unclassifiedFiles,
         violationsByLayer: result.violationsByLayer,
+        circularDeps: result.circularDeps,
         ...(scans && config ? { score: calculateScore(scans, result, config) } : {}),
       },
       null,
@@ -551,4 +743,13 @@ function wordWrap(text: string, maxWidth: number, indent: string): string {
   }
   if (current.trim().length > 0) lines.push(current);
   return lines.join('\n');
+}
+
+function printCircularDeps(cycles: CircularDep[]): void {
+  console.log();
+  console.log(chalk.magenta.bold('⟳  Circular dependencies detected between layers:\n'));
+  for (const { cycle } of cycles) {
+    console.log(`   ${chalk.magenta(cycle.join(' → '))}`);
+  }
+  console.log();
 }

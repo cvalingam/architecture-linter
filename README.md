@@ -356,6 +356,133 @@ Architecture Health Score
 
 The score is also included in `scan --format json` output under the `score` key.
 
+---
+
+### `badge`
+
+Generates a [shields.io](https://shields.io) badge URL for the architecture health score. Drop it in your README to show the current grade at a glance.
+
+```
+architecture-linter badge [options]
+```
+
+| Option | Description | Default |
+|---|---|---|
+| `-c, --context <path>` | Path to `.context.yml` | auto-detect |
+| `-p, --project <path>` | Project root directory | `.` |
+| `-f, --format <format>` | Output format: `url` or `markdown` | `url` |
+| `-o, --output <path>` | Write badge to a file instead of stdout | — |
+
+```bash
+# Print a shields.io URL
+npx architecture-linter badge
+
+# Print a Markdown image tag ready to paste into your README
+npx architecture-linter badge --format markdown
+
+# Write the badge URL to a file (useful in CI)
+npx architecture-linter badge --output .badge-url.txt
+```
+
+Badge colours: **A** = bright green, **B** = green, **C** = yellow, **D** = orange, **F** = red.
+
+---
+
+### `scan --format sarif`
+
+Outputs a [SARIF 2.1.0](https://sarifweb.azurewebsites.net/) document — the standard format for GitHub Code Scanning. Upload it with the `github/codeql-action/upload-sarif` action to get violations as native PR annotations.
+
+```bash
+npx architecture-linter scan --format sarif > results.sarif
+```
+
+Example GitHub Actions step:
+
+```yaml
+- name: Run architecture linter (SARIF)
+  run: npx architecture-linter scan --format sarif > arch.sarif
+
+- name: Upload SARIF to GitHub Code Scanning
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: arch.sarif
+```
+
+---
+
+### `scan --baseline` — ratchet mode
+
+Saves the current violation count and fails only when violations **increase**. Perfect for adopting the linter on an existing codebase without having to fix everything at once.
+
+```bash
+# First run: creates .arch-baseline.json and exits 0
+npx architecture-linter scan --baseline
+
+# Subsequent runs: fails only if violations exceeded the saved baseline
+npx architecture-linter scan --baseline
+
+# Explicitly update the baseline after cleaning up violations
+npx architecture-linter scan --baseline --update-baseline
+
+# Use a custom baseline file path
+npx architecture-linter scan --baseline baselines/prod.json
+```
+
+The baseline file (default `.arch-baseline.json`) records the violation count, timestamp, and tool version. Commit it to track regression over time.
+
+---
+
+### `scan --detect-circular`
+
+Detects **circular dependencies between architectural layers** using Tarjan's SCC algorithm. A cycle exists when layer A (transitively) imports layer B which imports back into layer A.
+
+```bash
+npx architecture-linter scan --detect-circular
+```
+
+Text output example:
+
+```
+↻  Circular dependencies detected between layers:
+
+   controller → service → controller
+```
+
+Circular dependencies are also included in `--format json` output under the `circularDeps` key:
+
+```json
+{
+  "circularDeps": [
+    { "cycle": ["controller", "service", "controller"] }
+  ]
+}
+```
+
+---
+
+### `scan --monorepo`
+
+Scans **all workspace packages** defined in the root `package.json` `workspaces` field. Each package uses its own `.context.yml` if one is present; otherwise falls back to the root config.
+
+```bash
+npx architecture-linter scan --monorepo
+```
+
+Each package is scanned independently and prefixed in the output:
+
+```
+Scanning @myorg/api-gateway...
+✅ No architecture violations found. (12 file(s) scanned)
+
+Scanning @myorg/user-service...
+❌ Architecture violation detected
+   ...
+```
+
+The command exits `1` if any package has violations.
+
+---
+
 ### Exit codes
 
 | Code | Meaning |

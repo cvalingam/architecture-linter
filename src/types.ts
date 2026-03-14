@@ -101,9 +101,17 @@ export interface ArchScore {
   };
 }
 
+/**
+ * A circular dependency detected between architectural layers.
+ * The `cycle` array traces the path, e.g. ['controller', 'service', 'controller'].
+ */
+export interface CircularDep {
+  cycle: string[];
+}
+
 /** Options passed from the CLI to the scan pipeline. */
 export interface ScanOptions {
-  format: 'text' | 'json';
+  format: 'text' | 'json' | 'sarif';
   /** Fail and report files that do not belong to any declared layer. */
   strict: boolean;
   /** Suppress informational output; only print violations. */
@@ -114,6 +122,14 @@ export interface ScanOptions {
   watch: boolean;
   /** Show a suggested fix for each violation. */
   fix: boolean;
+  /** True when --baseline flag was passed (enables ratchet mode). */
+  useBaseline: boolean;
+  /** Explicit path to baseline file; when absent the default (.arch-baseline.json) is used. */
+  baseline?: string;
+  /** When true, overwrite the baseline file with the current violation count. */
+  updateBaseline: boolean;
+  /** Detect circular dependencies between layers and include them in output. */
+  detectCircular: boolean;
 }
 
 /** Aggregated result returned by the rule engine. */
@@ -123,4 +139,6 @@ export interface RuleCheckResult {
   unclassifiedFiles: string[];
   /** Number of violations per layer name. */
   violationsByLayer: Record<string, number>;
+  /** Circular dependencies detected between layers (populated when detectCircular is enabled). */
+  circularDeps: CircularDep[];
 }
