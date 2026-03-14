@@ -25,6 +25,8 @@ import { resolveBaselinePath, loadBaseline, saveBaseline, hasRatchetFailed } fro
 import { discoverWorkspacePackages } from './monorepo';
 import { loadTsConfigAliases, mergeAliases } from './aliasResolver';
 import { CircularDep, RuleCheckResult, ScanOptions } from './types';
+import { toMermaid, toDot } from './graphFormatter';
+import { appendScoreHistory, loadScoreHistory, renderSparkline } from './scoreHistory';
 
 // Tool version — kept in sync with package.json at build time via the version() call below.
 const TOOL_VERSION: string = (() => {
@@ -50,7 +52,7 @@ program
   .description('Scan the project for architecture violations')
   .option('-c, --context <path>', 'path to the .context.yml config file (auto-detected if omitted)')
   .option('-p, --project <path>', 'root directory of the project to scan', '.')
-  .option('-f, --format <format>', 'output format: text, json, or sarif', 'text')
+  .option('-f, --format <format>', 'output format: text, json, sarif, mermaid, or dot', 'text')
   .option('-s, --strict', 'report files that do not belong to any declared layer', false)
   .option('-q, --quiet', 'suppress informational output; only print violations', false)
   .option('-e, --explain', 'print why/impact/fix explanation for each violation', false)
@@ -60,6 +62,7 @@ program
   .option('--update-baseline', 'write current violation count to the baseline file and exit 0', false)
   .option('--detect-circular', 'detect circular dependencies between layers', false)
   .option('--monorepo', 'scan all workspace packages defined in package.json workspaces', false)
+  .option('--max-violations <n>', 'fail when the number of error-severity violations exceeds this threshold', parseInt)
   .action(async (options: {
     context?: string;
     project: string;
@@ -73,10 +76,17 @@ program
     updateBaseline: boolean;
     detectCircular: boolean;
     monorepo: boolean;
+    maxViolations?: number;
   }) => {
     const projectDir = path.resolve(options.project);
     const rawFormat = options.format.toLowerCase();
-    const format = (rawFormat === 'json' ? 'json' : rawFormat === 'sarif' ? 'sarif' : 'text') as ScanOptions['format'];
+    const format = (
+      rawFormat === 'json' ? 'json'
+      : rawFormat === 'sarif' ? 'sarif'
+      : rawFormat === 'mermaid' ? 'mermaid'
+      : rawFormat === 'dot' ? 'dot'
+      : 'text'
+    ) as ScanOptions['format'];
     // --baseline alone (no value) defaults to true; coerce to undefined so resolveBaselinePath uses default filename
     const baselineArg = options.baseline === true ? undefined : options.baseline as string | undefined;
     const opts: ScanOptions = {
@@ -90,6 +100,7 @@ program
       baseline: baselineArg,
       updateBaseline: options.updateBaseline,
       detectCircular: options.detectCircular,
+      maxViolations: options.maxViolations,
     };
 
     // Resolve config: explicit flag → auto-detect walking up from project dir → error
@@ -145,7 +156,7 @@ program
       if (scans.length === 0) {
         if (format === 'json') {
           console.log(
-            JSON.stringify({ filesScanned: 0, violations: [], unclassifiedFiles: [], violationsByLayer: {}, circularDeps: [] }, null, 2)
+            JSON.stringify({ filesScanned: 0, violations: [], warnings: [], unclassifiedFiles: [], violationsByLayer: {}, circularDeps: [], couplingMatrix: {} }, null, 2)
           );
         } else if (format === 'text') {
           console.log(pkgLabel
@@ -171,6 +182,12 @@ program
         console.log(JSON.stringify(toSarif(result.violations, TOOL_VERSION), null, 2));
       } else if (format === 'json') {
         printJson(result, scans.length, opts, scans, pkgConfig);
+      } else if (format === 'mermaid') {
+        console.log(toMermaid(result.couplingMatrix));
+        return false; // graph output only — never fail CI
+      } else if (format === 'dot') {
+        console.log(toDot(result.couplingMatrix));
+        return false; // graph output only — never fail CI
       } else {
         printText(result, scans.length, opts);
         if (opts.detectCircular && result.circularDeps.length > 0) {
@@ -181,6 +198,20 @@ program
       const violationCount = result.violations.length;
       const hasUnclassified = opts.strict && result.unclassifiedFiles.length > 0;
       const hasCircular = opts.detectCircular && result.circularDeps.length > 0;
+
+      // --max-violations threshold check
+      if (opts.maxViolations !== undefined) {
+        if (violationCount > opts.maxViolations) {
+          if (!opts.quiet) {
+            console.log(chalk.red(
+              `Max violations exceeded: ${violationCount} (threshold: ${opts.maxViolations})`
+            ));
+          }
+          return true;
+        }
+        // Under or at threshold — exit 0 regardless of violation count
+        return false;
+      }
 
       // ── Baseline / ratchet mode ────────────────────────────────────────────
       if (opts.useBaseline || opts.updateBaseline) {
@@ -519,10 +550,20 @@ program
     const result = checkRules(scans, config, true, false);
     const archScore = calculateScore(scans, result, config);
 
+    // Persist score to history file
+    appendScoreHistory(projectDir, {
+      timestamp: new Date().toISOString(),
+      score: archScore.score,
+      grade: archScore.grade,
+      violations: result.violations.length,
+      version: TOOL_VERSION,
+    });
+
     if (format === 'json') {
-      console.log(JSON.stringify(archScore, null, 2));
+      const history = loadScoreHistory(projectDir);
+      console.log(JSON.stringify({ ...archScore, history }, null, 2));
     } else {
-      printScoreText(archScore);
+      printScoreText(archScore, projectDir);
     }
 
     process.exit(0);
@@ -610,22 +651,24 @@ program.parse(process.argv);
 // ── output helpers ────────────────────────────────────────────────────────────
 
 function printJson(result: RuleCheckResult, filesScanned: number, opts: ScanOptions, scans?: import('./types').FileScan[], config?: import('./types').ContextConfig): void {
-  const violations = result.violations.map(v => {
+  const mapViolation = (v: import('./types').Violation) => {
     const entry: Record<string, unknown> = { ...v };
     if (opts.explain) {
       entry.explanation = explain(v.sourceLayer, v.targetLayer, v.rule);
     }
     return entry;
-  });
+  };
 
   console.log(
     JSON.stringify(
       {
         filesScanned,
-        violations,
+        violations: result.violations.map(mapViolation),
+        warnings: result.warnings.map(mapViolation),
         unclassifiedFiles: result.unclassifiedFiles,
         violationsByLayer: result.violationsByLayer,
         circularDeps: result.circularDeps,
+        couplingMatrix: result.couplingMatrix,
         ...(scans && config ? { score: calculateScore(scans, result, config) } : {}),
       },
       null,
@@ -635,9 +678,18 @@ function printJson(result: RuleCheckResult, filesScanned: number, opts: ScanOpti
 }
 
 function printText(result: RuleCheckResult, filesScanned: number, opts: ScanOptions): void {
-  const { violations, unclassifiedFiles, violationsByLayer } = result;
+  const { violations, warnings, unclassifiedFiles, violationsByLayer } = result;
 
-  // Violations
+  // Warn-severity violations
+  for (const v of warnings) {
+    console.log(chalk.yellow.bold('⚠️  Architecture warning\n'));
+    console.log(`   ${chalk.bold('File:')}   ${chalk.yellow(v.file)}`);
+    console.log(`   ${chalk.bold('Import:')} ${v.importPath}`);
+    console.log(`   ${chalk.bold('Rule:')}   ${v.rule}`);
+    console.log();
+  }
+
+  // Error-severity violations
   for (const v of violations) {
     console.log(chalk.red.bold('❌ Architecture violation detected\n'));
     console.log(`   ${chalk.bold('File:')}   ${chalk.yellow(v.file)}`);
@@ -675,8 +727,14 @@ function printText(result: RuleCheckResult, filesScanned: number, opts: ScanOpti
     console.log();
   }
 
-  if (violations.length === 0 && (!opts.strict || unclassifiedFiles.length === 0)) {
+  if (violations.length === 0 && warnings.length === 0 && (!opts.strict || unclassifiedFiles.length === 0)) {
     console.log(chalk.green(`✅ No architecture violations found. (${filesScanned} file(s) scanned)`));
+    return;
+  }
+
+  if (warnings.length > 0 && violations.length === 0 && (!opts.strict || unclassifiedFiles.length === 0)) {
+    const wLabel = warnings.length === 1 ? 'warning' : 'warnings';
+    console.log(chalk.yellow(`⚠️  ${warnings.length} ${wLabel} found in ${filesScanned} file(s) scanned. (exit 0)`));
     return;
   }
 
@@ -698,7 +756,7 @@ function printText(result: RuleCheckResult, filesScanned: number, opts: ScanOpti
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function printScoreText(s: import('./types').ArchScore): void {
+function printScoreText(s: import('./types').ArchScore, projectDir?: string): void {
   const gradeColour = s.grade === 'A' ? chalk.green
     : s.grade === 'B' ? chalk.cyan
     : s.grade === 'C' ? chalk.yellow
@@ -710,6 +768,16 @@ function printScoreText(s: import('./types').ArchScore): void {
   console.log(chalk.bold('Architecture Health Score'));
   console.log();
   console.log(`  ${gradeColour.bold(`${s.score}/100`)}  Grade: ${gradeColour.bold(s.grade)}  ${gradeColour(bar)}`);
+
+  // Show score sparkline when history is available
+  if (projectDir) {
+    const history = loadScoreHistory(projectDir);
+    const sparkline = renderSparkline(history);
+    if (sparkline) {
+      console.log(`  Trend: ${chalk.cyan(sparkline)}`);
+    }
+  }
+
   console.log();
   console.log(chalk.bold('  Breakdown:'));
   console.log(`    Violation density   ${String(s.breakdown.violations).padStart(3)}/60  pts`);

@@ -33,6 +33,11 @@ export interface LayerRule {
   can_only_import?: string[];
   /** Optional file glob (project-relative). Rule only applies to source files matching this pattern. */
   files?: string;
+  /**
+   * Severity of violations for this layer's rule.
+   * 'error' (default) causes a non-zero exit code; 'warn' prints the violation but exits 0.
+   */
+  severity?: 'error' | 'warn';
 }
 
 /**
@@ -67,6 +72,8 @@ export interface Violation {
   sourceLayer: string;
   targetLayer: string;
   rule: string;
+  /** Severity: 'error' (default) causes exit 1; 'warn' prints but exits 0. */
+  severity?: 'error' | 'warn';
   /** Textual suggestion for resolving the violation (populated when --fix is enabled). */
   fix?: string;
 }
@@ -111,7 +118,7 @@ export interface CircularDep {
 
 /** Options passed from the CLI to the scan pipeline. */
 export interface ScanOptions {
-  format: 'text' | 'json' | 'sarif';
+  format: 'text' | 'json' | 'sarif' | 'mermaid' | 'dot';
   /** Fail and report files that do not belong to any declared layer. */
   strict: boolean;
   /** Suppress informational output; only print violations. */
@@ -130,15 +137,21 @@ export interface ScanOptions {
   updateBaseline: boolean;
   /** Detect circular dependencies between layers and include them in output. */
   detectCircular: boolean;
+  /** Fail if the number of ERROR-severity violations exceeds this threshold. */
+  maxViolations?: number;
 }
 
 /** Aggregated result returned by the rule engine. */
 export interface RuleCheckResult {
   violations: Violation[];
+  /** Violations with severity='warn' only — exit 0. */
+  warnings: Violation[];
   /** Populated only in strict mode: files whose directory matches no layer. */
   unclassifiedFiles: string[];
-  /** Number of violations per layer name. */
+  /** Number of error-severity violations per layer name. */
   violationsByLayer: Record<string, number>;
   /** Circular dependencies detected between layers (populated when detectCircular is enabled). */
   circularDeps: CircularDep[];
+  /** N×N import count between every pair of layers. */
+  couplingMatrix: Record<string, Record<string, number>>;
 }

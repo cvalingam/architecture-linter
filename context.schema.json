@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/cvalingam/architecture-linter/main/context.schema.json",
+  "title": "architecture-linter config (.context.yml)",
+  "description": "Configuration schema for the architecture-linter tool. Place as .context.yml in your project root.",
+  "type": "object",
+  "required": ["architecture"],
+  "additionalProperties": false,
+  "properties": {
+    "extends": {
+      "type": "string",
+      "description": "Extend a built-in preset. Supported values: 'mvc', 'clean', 'hexagonal', 'ddd', 'layered'.",
+      "enum": ["mvc", "clean", "hexagonal", "ddd", "layered"]
+    },
+    "architecture": {
+      "type": "object",
+      "required": ["layers"],
+      "additionalProperties": false,
+      "description": "Defines the architectural layers that exist in your project.",
+      "properties": {
+        "layers": {
+          "type": "array",
+          "description": "Ordered list of layer names (singular). Both singular and plural directory names are matched. Glob patterns (containing *, ?, or /) are matched via minimatch.",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "description": "Per-layer import rules. Key is the layer name as declared in architecture.layers.",
+      "additionalProperties": {
+        "$ref": "#/definitions/layerRule"
+      }
+    },
+    "exclude": {
+      "type": "array",
+      "description": "Glob patterns for files to exclude from scanning (project-relative).",
+      "items": { "type": "string" }
+    },
+    "aliases": {
+      "type": "object",
+      "description": "Module alias mappings (e.g. @ → src). Keys are alias prefixes; values are relative directory paths.",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "definitions": {
+    "layerRule": {
+      "type": "object",
+      "description": "Rules for a single architectural layer.",
+      "additionalProperties": false,
+      "properties": {
+        "cannot_import": {
+          "type": "array",
+          "description": "Blacklist: this layer must not import from any of the listed layers.",
+          "items": { "type": "string" }
+        },
+        "can_only_import": {
+          "type": "array",
+          "description": "Whitelist: this layer may only import from the listed layers. Mutually exclusive with cannot_import.",
+          "items": { "type": "string" }
+        },
+        "files": {
+          "type": "string",
+          "description": "Optional glob pattern (project-relative). Rule is scoped to source files matching this pattern."
+        },
+        "severity": {
+          "type": "string",
+          "description": "'error' (default) causes a non-zero exit code. 'warn' prints the violation but exits 0.",
+          "enum": ["error", "warn"],
+          "default": "error"
+        }
+      }
+    }
+  }
+}

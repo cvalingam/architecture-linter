@@ -36,9 +36,11 @@ function makeResult(
       targetLayer: 'repository',
       rule: 'controller cannot_import repository',
     })),
+    warnings: [],
     unclassifiedFiles,
     violationsByLayer: {},
     circularDeps: [],
+    couplingMatrix: {},
   };
 }
 

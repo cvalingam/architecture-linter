@@ -559,3 +559,116 @@ describe('badge command', () => {
     expect(hasColour).toBe(true);
   });
 });
+
+// ── scan --max-violations ─────────────────────────────────────────────────────
+
+describe('scan --max-violations', () => {
+  it('exits 0 when violations are at or below the threshold', () => {
+    // sample-project has at least 1 violation; setting threshold to 100 should pass
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--max-violations', '100']);
+    expect(r.status).toBe(0);
+  });
+
+  it('exits 1 when violations exceed the threshold', () => {
+    // threshold of 0 should fail on any project with violations
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--max-violations', '0']);
+    expect(r.status).toBe(1);
+  });
+
+  it('prints "Max violations exceeded" when threshold is breached', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--max-violations', '0']);
+    expect(r.stdout).toContain('Max violations exceeded');
+  });
+});
+
+// ── scan --format mermaid / dot ───────────────────────────────────────────────
+
+describe('scan --format mermaid', () => {
+  it('outputs "graph LR"', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'mermaid']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('graph LR');
+  });
+
+  it('exits 0 even when violations exist (graph output only)', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'mermaid']);
+    expect(r.status).toBe(0);
+  });
+});
+
+describe('scan --format dot', () => {
+  it('outputs DOT digraph header', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'dot']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('digraph arch {');
+  });
+
+  it('includes "rankdir=LR;"', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'dot']);
+    expect(r.stdout).toContain('rankdir=LR;');
+  });
+});
+
+// ── scan JSON output includes warnings + couplingMatrix ───────────────────────
+
+describe('scan --format json - new fields', () => {
+  it('JSON output includes warnings array', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'json']);
+    const json = JSON.parse(r.stdout);
+    expect(json).toHaveProperty('warnings');
+    expect(Array.isArray(json.warnings)).toBe(true);
+  });
+
+  it('JSON output includes couplingMatrix', () => {
+    const r = run(['scan', '-p', SAMPLE_PROJECT, '-c', SAMPLE_CONTEXT, '--format', 'json']);
+    const json = JSON.parse(r.stdout);
+    expect(json).toHaveProperty('couplingMatrix');
+    expect(typeof json.couplingMatrix).toBe('object');
+  });
+});
+
+// ── severity: warn — exit 0 ───────────────────────────────────────────────────
+
+describe('scan - severity: warn', () => {
+  it('exits 0 when all violations are warn-severity', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arch-warn-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'controllers'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'repositories'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'controllers', 'ctrl.ts'),
+        "import { Repo } from '../repositories/repo';\nexport class C {}"
+      );
+      fs.writeFileSync(path.join(dir, 'repositories', 'repo.ts'), 'export class Repo {}');
+      fs.writeFileSync(
+        path.join(dir, '.context.yml'),
+        'architecture:\n  layers:\n    - controller\n    - repository\nrules:\n  controller:\n    cannot_import:\n      - repository\n    severity: warn\n'
+      );
+      const r = run(['scan', '-p', dir]);
+      expect(r.status).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('prints warning symbol for warn-severity violations', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arch-warn2-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'controllers'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'repositories'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'controllers', 'ctrl.ts'),
+        "import { Repo } from '../repositories/repo';\nexport class C {}"
+      );
+      fs.writeFileSync(path.join(dir, 'repositories', 'repo.ts'), 'export class Repo {}');
+      fs.writeFileSync(
+        path.join(dir, '.context.yml'),
+        'architecture:\n  layers:\n    - controller\n    - repository\nrules:\n  controller:\n    cannot_import:\n      - repository\n    severity: warn\n'
+      );
+      const r = run(['scan', '-p', dir]);
+      expect(r.stdout).toContain('warning');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

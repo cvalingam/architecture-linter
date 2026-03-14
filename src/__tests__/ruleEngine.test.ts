@@ -273,3 +273,111 @@ describe('checkRules - violationsByLayer', () => {
     expect(result.violationsByLayer.repository).toBe(0);
   });
 });
+
+// ── checkRules - severity levels ──────────────────────────────────────────────
+
+describe('checkRules - severity levels', () => {
+  it('default severity is error — violation goes into violations[]', () => {
+    const config: ContextConfig = {
+      architecture: { layers: ['controller', 'repository'] },
+      rules: { controller: { cannot_import: ['repository'] } },
+    };
+    const scans = [makeScan('controllers/a.ts', [makeImport('controllers/a.ts', 'repositories/r.ts')])];
+    const result = checkRules(scans, config);
+    expect(result.violations).toHaveLength(1);
+    expect(result.warnings).toHaveLength(0);
+    expect(result.violations[0].severity).toBe('error');
+  });
+
+  it('severity: warn — violation goes into warnings[], not violations[]', () => {
+    const config: ContextConfig = {
+      architecture: { layers: ['controller', 'repository'] },
+      rules: { controller: { cannot_import: ['repository'], severity: 'warn' } },
+    };
+    const scans = [makeScan('controllers/a.ts', [makeImport('controllers/a.ts', 'repositories/r.ts')])];
+    const result = checkRules(scans, config);
+    expect(result.violations).toHaveLength(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0].severity).toBe('warn');
+  });
+
+  it('warn-severity violations are not counted in violationsByLayer', () => {
+    const config: ContextConfig = {
+      architecture: { layers: ['controller', 'repository'] },
+      rules: { controller: { cannot_import: ['repository'], severity: 'warn' } },
+    };
+    const scans = [makeScan('controllers/a.ts', [makeImport('controllers/a.ts', 'repositories/r.ts')])];
+    const result = checkRules(scans, config);
+    expect(result.violationsByLayer.controller).toBe(0);
+  });
+
+  it('severity: error explicitly — goes into violations[]', () => {
+    const config: ContextConfig = {
+      architecture: { layers: ['controller', 'repository'] },
+      rules: { controller: { cannot_import: ['repository'], severity: 'error' } },
+    };
+    const scans = [makeScan('controllers/a.ts', [makeImport('controllers/a.ts', 'repositories/r.ts')])];
+    const result = checkRules(scans, config);
+    expect(result.violations).toHaveLength(1);
+    expect(result.warnings).toHaveLength(0);
+  });
+});
+
+// ── checkRules - coupling matrix ──────────────────────────────────────────────
+
+describe('checkRules - couplingMatrix', () => {
+  const config: ContextConfig = {
+    architecture: { layers: ['controller', 'service', 'repository'] },
+    rules: {},
+  };
+
+  it('returns a matrix initialised with zeroes for all layer pairs', () => {
+    const result = checkRules([], config);
+    expect(result.couplingMatrix).toEqual({
+      controller: { controller: 0, service: 0, repository: 0 },
+      service:    { controller: 0, service: 0, repository: 0 },
+      repository: { controller: 0, service: 0, repository: 0 },
+    });
+  });
+
+  it('counts imports between layers regardless of rule violations', () => {
+    const scans = [
+      makeScan('controllers/a.ts', [
+        makeImport('controllers/a.ts', 'services/svc.ts'),
+        makeImport('controllers/a.ts', 'services/svc2.ts'),
+        makeImport('controllers/a.ts', 'repositories/r.ts'),
+      ]),
+    ];
+    const result = checkRules(scans, config);
+    expect(result.couplingMatrix.controller.service).toBe(2);
+    expect(result.couplingMatrix.controller.repository).toBe(1);
+    expect(result.couplingMatrix.service.controller).toBe(0);
+  });
+
+  it('does not count same-layer imports (self-coupling)', () => {
+    const scans = [
+      makeScan('controllers/a.ts', [makeImport('controllers/a.ts', 'controllers/b.ts')]),
+    ];
+    const result = checkRules(scans, config);
+    expect(result.couplingMatrix.controller.controller).toBe(0);
+  });
+});
+
+// ── detectLayer - wildcard / glob patterns ────────────────────────────────────
+
+describe('detectLayer - wildcard (glob) layer patterns', () => {
+  it('matches file via minimatch when layer contains *', () => {
+    const layers = ['src/*/controllers/**'];
+    expect(detectLayer('src/orders/controllers/orderCtrl.ts', layers)).toBe('src/*/controllers/**');
+  });
+
+  it('returns null when glob-style layer does not match the file', () => {
+    const layers = ['src/*/controllers/**'];
+    expect(detectLayer('src/orders/services/orderSvc.ts', layers)).toBeNull();
+  });
+
+  it('falls back to classic matching when non-glob layers are listed', () => {
+    const layers = ['src/*/controllers/**', 'service'];
+    expect(detectLayer('services/orderSvc.ts', layers)).toBe('service');
+  });
+});

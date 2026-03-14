@@ -186,3 +186,56 @@ aliases:
     expect(cfg.aliases?.['@repos']).toBe('src/repositories');
   });
 });
+
+// ── loadContextConfig - mutual exclusivity warning ────────────────────────────
+
+describe('loadContextConfig - mutual exclusivity warning', () => {
+  let dir: string;
+  beforeEach(() => { dir = tmpDir(); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it('warns to console when both cannot_import and can_only_import are set', () => {
+    const p = writeConfig(dir, `
+architecture:
+  layers:
+    - controller
+    - service
+    - repository
+rules:
+  controller:
+    cannot_import:
+      - repository
+    can_only_import:
+      - service
+`);
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      loadContextConfig(p);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("cannot_import"));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("can_only_import"));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("controller"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('does not warn when only cannot_import is set', () => {
+    const p = writeConfig(dir, `
+architecture:
+  layers:
+    - controller
+    - repository
+rules:
+  controller:
+    cannot_import:
+      - repository
+`);
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      loadContextConfig(p);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});

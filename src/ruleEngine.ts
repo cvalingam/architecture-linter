@@ -20,9 +20,12 @@ function capitalise(str: string): string {
 }
 
 /**
- * Determines which architectural layer a file or import path belongs to by
- * inspecting each directory segment (not the filename) for a layer name match.
- * Both singular and plural forms are recognised.
+ * Determines which architectural layer a file or import path belongs to.
+ *
+ * - Plain layer names (e.g. 'controller') are matched by directory component
+ *   (singular and plural forms recognised).
+ * - Glob/wildcard layer names (containing *, ?, or /) are matched via minimatch
+ *   against the full file path. This supports patterns like 'src/*\/controllers/**'.
  *
  * Returns the first matching layer, or null if no match is found.
  */
@@ -30,6 +33,14 @@ export function detectLayer(filePath: string, layers: string[]): string | null {
   const directories = filePath.split('/').slice(0, -1);
 
   for (const layer of layers) {
+    // Glob-style pattern: delegate to minimatch
+    if (/[*?/]/.test(layer)) {
+      if (minimatch(filePath, layer, { matchBase: false })) {
+        return layer;
+      }
+      continue;
+    }
+    // Classic: match any directory component (singular / plural)
     const candidates = pluralCandidates(layer);
     for (const dir of directories) {
       if (candidates.includes(dir.toLowerCase())) {
@@ -93,9 +104,11 @@ function buildFixSuggestion(
  *  - cannot_import   blacklist: the layer must not import from listed layers.
  *  - can_only_import whitelist: the layer may only import from listed layers.
  *  - files           glob:      rule only applies to source files matching the pattern.
+ *  - severity        'error' (default) → violations[]; 'warn' → warnings[] (exit 0).
  *  - arch-ignore     inline comment on the import suppresses a specific violation.
  *  - strict          collects files that belong to no declared layer.
  *  - generateFix     when true, populates the `fix` field on each Violation.
+ *  - couplingMatrix  populated with import counts between every pair of layers.
  */
 export function checkRules(
   scans: FileScan[],
@@ -104,13 +117,19 @@ export function checkRules(
   generateFix = false,
 ): RuleCheckResult {
   const violations: Violation[] = [];
+  const warnings: Violation[] = [];
   const unclassifiedFiles: string[] = [];
   const violationsByLayer: Record<string, number> = {};
+  const couplingMatrix: Record<string, Record<string, number>> = {};
   const layers = config.architecture.layers;
 
-  // Initialise per-layer counters so every layer appears in the summary.
+  // Initialise per-layer counters and coupling matrix rows.
   for (const layer of layers) {
     violationsByLayer[layer] = 0;
+    couplingMatrix[layer] = {};
+    for (const other of layers) {
+      couplingMatrix[layer][other] = 0;
+    }
   }
 
   for (const scan of scans) {
@@ -122,16 +141,29 @@ export function checkRules(
     }
 
     const layerRule = config.rules?.[sourceLayer];
-    if (!layerRule) continue;
 
     // If the rule has a files pattern, only apply it to matching source files.
-    if (layerRule.files && !minimatch(scan.file, layerRule.files)) {
+    if (layerRule?.files && !minimatch(scan.file, layerRule.files)) {
+      // Still count coupling even when file glob excludes this file from rule checks
+      for (const importInfo of scan.imports) {
+        const targetLayer = detectLayer(importInfo.importPath, layers);
+        if (targetLayer && targetLayer !== sourceLayer) {
+          couplingMatrix[sourceLayer][targetLayer]++;
+        }
+      }
       continue;
     }
 
     for (const importInfo of scan.imports) {
       const targetLayer = detectLayer(importInfo.importPath, layers);
       if (!targetLayer) continue;
+
+      // Accumulate coupling for every cross-layer import regardless of rules.
+      if (targetLayer !== sourceLayer) {
+        couplingMatrix[sourceLayer][targetLayer]++;
+      }
+
+      if (!layerRule) continue;
 
       const ruleString = `${capitalise(sourceLayer)} cannot import ${capitalise(targetLayer)}`;
 
@@ -153,6 +185,7 @@ export function checkRules(
       }
 
       if (violated) {
+        const severity = layerRule.severity ?? 'error';
         const violation: Violation = {
           file: scan.file,
           importPath: importInfo.importPath,
@@ -160,18 +193,23 @@ export function checkRules(
           sourceLayer,
           targetLayer,
           rule: ruleString,
+          severity,
         };
 
         if (generateFix) {
           violation.fix = buildFixSuggestion(sourceLayer, targetLayer, config);
         }
 
-        violations.push(violation);
-        // sourceLayer is always in violationsByLayer (initialised above for every layer)
-        violationsByLayer[sourceLayer]++;
+        if (severity === 'warn') {
+          warnings.push(violation);
+        } else {
+          violations.push(violation);
+          // Only error-severity violations count toward the per-layer summary.
+          violationsByLayer[sourceLayer]++;
+        }
       }
     }
   }
 
-  return { violations, unclassifiedFiles, violationsByLayer, circularDeps: [] };
+  return { violations, warnings, unclassifiedFiles, violationsByLayer, circularDeps: [], couplingMatrix };
 }

@@ -65,5 +65,15 @@ export function loadContextConfig(contextPath: string): ContextConfig {
     throw new Error('Invalid context file: "architecture.layers" must contain at least one layer.');
   }
 
+  // Warn about mutually exclusive rules (cannot_import + can_only_import on the same layer).
+  for (const [layer, rule] of Object.entries(resolved.rules ?? {})) {
+    if (rule.cannot_import !== undefined && rule.can_only_import !== undefined) {
+      console.warn(
+        `[architecture-linter] Warning: layer '${layer}' has both 'cannot_import' and ` +
+        `'can_only_import' defined. Only 'cannot_import' will be evaluated.`
+      );
+    }
+  }
+
   return resolved;
 }

@@ -22,7 +22,7 @@ export async function scanProject(
   exclude: string[] = [],
   aliases: AliasMap = {}
 ): Promise<FileScan[]> {
-  const absoluteFiles = await fg('**/*.ts', {
+  const absoluteFiles = await fg('**/*.{ts,tsx,js,jsx,mjs,cjs}', {
     cwd: projectDir,
     ignore: ['**/node_modules/**', '**/dist/**', '**/*.d.ts', ...exclude],
     absolute: true,
@@ -37,6 +37,10 @@ export async function scanProject(
   const project = new Project({
     skipAddingFilesFromTsConfig: true,
     skipFileDependencyResolution: true,
+    compilerOptions: {
+      allowJs: true,
+      jsx: 4 /* JsxEmit.ReactJSX — allow JSX in .tsx/.jsx/.js files */,
+    },
   });
 
   const results: FileScan[] = [];
@@ -46,6 +50,13 @@ export async function scanProject(
     const relativeFile = toForwardSlash(path.relative(projectDir, absoluteFile));
     const fileDir = path.dirname(absoluteFile);
     const sourceLines = sourceFile.getFullText().split('\n');
+
+    // arch-ignore-file: suppress all violations for this file
+    const firstLines = sourceLines.slice(0, 5).map(l => l.trim());
+    if (firstLines.some(l => /\/\/\s*arch-ignore-file/i.test(l))) {
+      results.push({ file: relativeFile, layer: null, imports: [] });
+      continue;
+    }
 
     const imports: ImportInfo[] = [];
 
