@@ -100,7 +100,7 @@ rules: {}
     const cfg = loadContextConfig(p);
     expect(cfg.architecture.layers).toContain('controller');
     expect(cfg.architecture.layers).toContain('service');
-    expect(cfg.architecture.layers).toContain('repository');
+    expect(cfg.architecture.layers).toContain('schema');
   });
 
   it('allows omitting architecture entirely when extends is set', () => {

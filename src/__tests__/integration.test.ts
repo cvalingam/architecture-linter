@@ -239,23 +239,23 @@ describe('scan - alias resolution', () => {
 // ── scan - framework preset ───────────────────────────────────────────────────
 
 describe('scan - framework preset', () => {
-  it('nestjs preset detects controller→repository violation in a temp project', () => {
+  it('nestjs preset detects controller→schema violation in a temp project', () => {
     const dir = tmpDir();
     try {
       fs.mkdirSync(path.join(dir, 'controllers'), { recursive: true });
-      fs.mkdirSync(path.join(dir, 'repositories'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'schemas'), { recursive: true });
       fs.writeFileSync(
         path.join(dir, 'controllers', 'ctrl.ts'),
-        `import { Repo } from '../repositories/repo';\nexport class C {}`
+        `import { OrderSchema } from '../schemas/order.schema';\nexport class C {}`
       );
-      fs.writeFileSync(path.join(dir, 'repositories', 'repo.ts'), 'export class Repo {}');
+      fs.writeFileSync(path.join(dir, 'schemas', 'order.schema.ts'), 'export const OrderSchema = {};');
       fs.writeFileSync(
         path.join(dir, '.context.yml'),
         'extends: nestjs\narchitecture:\n  layers: []\nrules: {}\n'
       );
       const r = run(['scan', '-p', dir]);
       expect(r.status).toBe(1);
-      expect(r.stdout).toMatch(/Controller cannot import Repository/i);
+      expect(r.stdout).toMatch(/Controller cannot import Schema/i);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -24,19 +24,39 @@ describe('resolvePresets - nestjs preset', () => {
     const result = resolvePresets({ ...emptyConfig(), extends: 'nestjs' });
     expect(result.architecture.layers).toContain('controller');
     expect(result.architecture.layers).toContain('service');
-    expect(result.architecture.layers).toContain('repository');
+    expect(result.architecture.layers).toContain('schema');
+    expect(result.architecture.layers).toContain('utils');
     expect(result.architecture.layers).toContain('guard');
-    expect(result.architecture.layers).toContain('entity');
+    expect(result.architecture.layers).toContain('dto');
+    expect(result.architecture.layers).toContain('filter');
   });
 
-  it('nestjs preset forbids controller from importing repository', () => {
+  it('controller cannot import schema (must go through service)', () => {
     const result = resolvePresets({ ...emptyConfig(), extends: 'nestjs' });
-    expect(result.rules?.controller?.cannot_import).toContain('repository');
+    expect(result.rules?.controller?.cannot_import).toContain('schema');
   });
 
-  it('nestjs preset forbids controller from importing entity', () => {
+  it('controller cannot import another controller (no cross-module coupling)', () => {
     const result = resolvePresets({ ...emptyConfig(), extends: 'nestjs' });
-    expect(result.rules?.controller?.cannot_import).toContain('entity');
+    expect(result.rules?.controller?.cannot_import).toContain('controller');
+  });
+
+  it('service cannot import controller (no reverse dependency)', () => {
+    const result = resolvePresets({ ...emptyConfig(), extends: 'nestjs' });
+    expect(result.rules?.service?.cannot_import).toContain('controller');
+  });
+
+  it('utils cannot import service or controller (must stay pure)', () => {
+    const result = resolvePresets({ ...emptyConfig(), extends: 'nestjs' });
+    expect(result.rules?.utils?.cannot_import).toContain('service');
+    expect(result.rules?.utils?.cannot_import).toContain('controller');
+  });
+
+  it('guard/interceptor/pipe cannot import schema directly', () => {
+    const result = resolvePresets({ ...emptyConfig(), extends: 'nestjs' });
+    expect(result.rules?.guard?.cannot_import).toContain('schema');
+    expect(result.rules?.interceptor?.cannot_import).toContain('schema');
+    expect(result.rules?.pipe?.cannot_import).toContain('schema');
   });
 });
 

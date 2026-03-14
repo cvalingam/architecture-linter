@@ -14,15 +14,21 @@ export const PRESETS: Record<string, Partial<ContextConfig>> = {
   'nestjs': {
     architecture: {
       layers: [
-        'module', 'controller', 'service', 'repository',
-        'guard', 'interceptor', 'pipe', 'decorator', 'dto', 'entity',
+        'module', 'controller', 'service', 'schema',
+        'dto', 'utils', 'guard', 'decorator', 'filter', 'interceptor', 'pipe',
       ],
     },
     rules: {
-      controller: { cannot_import: ['repository', 'entity'] },
-      guard:       { cannot_import: ['repository'] },
-      interceptor: { cannot_import: ['repository'] },
-      pipe:        { cannot_import: ['repository'] },
+      // Controllers handle HTTP only — no direct DB access, no cross-controller imports
+      controller:  { cannot_import: ['schema', 'controller'] },
+      // Services orchestrate logic — must not depend on HTTP layer
+      service:     { cannot_import: ['controller'] },
+      // Utils must stay pure — no business logic or HTTP concerns
+      utils:       { cannot_import: ['service', 'controller'] },
+      // Cross-cutting infrastructure layers must not touch DB models directly
+      guard:       { cannot_import: ['schema'] },
+      interceptor: { cannot_import: ['schema'] },
+      pipe:        { cannot_import: ['schema'] },
     },
   },
 

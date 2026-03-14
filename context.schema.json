@@ -8,9 +8,20 @@
   "additionalProperties": false,
   "properties": {
     "extends": {
-      "type": "string",
-      "description": "Extend a built-in preset. Supported values: 'mvc', 'clean', 'hexagonal', 'ddd', 'layered'.",
-      "enum": ["mvc", "clean", "hexagonal", "ddd", "layered"]
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Extend a single built-in preset.",
+          "enum": ["nestjs", "clean-architecture", "hexagonal", "nextjs"]
+        },
+        {
+          "type": "array",
+          "description": "Extend multiple built-in presets, merged left-to-right.",
+          "items": { "enum": ["nestjs", "clean-architecture", "hexagonal", "nextjs"] },
+          "minItems": 1
+        }
+      ],
+      "description": "Extend one or more built-in presets. Supported values: 'nestjs', 'clean-architecture', 'hexagonal', 'nextjs'."
     },
     "architecture": {
       "type": "object",
