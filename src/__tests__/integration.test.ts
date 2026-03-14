@@ -379,10 +379,19 @@ describe('init command', () => {
     expect(content).toContain('repository');
   });
 
-  it('exits 1 when .context.yml already exists', () => {
+  it('exits 1 when .context.yml already exists (no --force)', () => {
     fs.writeFileSync(path.join(dir, '.context.yml'), 'pre-existing');
     const r = run(['init', '-p', dir]);
     expect(r.status).toBe(1);
+    // original content should be unchanged
+    expect(fs.readFileSync(path.join(dir, '.context.yml'), 'utf-8')).toBe('pre-existing');
+  });
+
+  it('--force overwrites an existing .context.yml', () => {
+    fs.writeFileSync(path.join(dir, '.context.yml'), 'pre-existing');
+    const r = run(['init', '-p', dir, '--force']);
+    expect(r.status).toBe(0);
+    expect(fs.readFileSync(path.join(dir, '.context.yml'), 'utf-8')).not.toBe('pre-existing');
   });
 
   it('generated .context.yml contains an architecture section', () => {
@@ -390,6 +399,48 @@ describe('init command', () => {
     const content = fs.readFileSync(path.join(dir, '.context.yml'), 'utf-8');
     expect(content).toContain('architecture:');
     expect(content).toContain('layers:');
+  });
+
+  it('detects NestJS from package.json and writes extends: nestjs', () => {
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ dependencies: { '@nestjs/core': '^10.0.0', '@nestjs/common': '^10.0.0' } })
+    );
+    run(['init', '-p', dir]);
+    const content = fs.readFileSync(path.join(dir, '.context.yml'), 'utf-8');
+    expect(content).toContain('extends: nestjs');
+    expect(content).toContain('Framework detected: NestJS');
+  });
+
+  it('detects Next.js from package.json and writes extends: nextjs', () => {
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ dependencies: { next: '^14.0.0' } })
+    );
+    run(['init', '-p', dir]);
+    const content = fs.readFileSync(path.join(dir, '.context.yml'), 'utf-8');
+    expect(content).toContain('extends: nextjs');
+    expect(content).toContain('Framework detected: Next.js');
+  });
+
+  it('NestJS init detects layers from *.controller.ts file suffixes', () => {
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ dependencies: { '@nestjs/core': '^10.0.0' } })
+    );
+    fs.mkdirSync(path.join(dir, 'src', 'order'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'order', 'order.controller.ts'), 'export class C {}');
+    fs.writeFileSync(path.join(dir, 'src', 'order', 'order.service.ts'), 'export class S {}');
+    fs.writeFileSync(path.join(dir, 'src', 'order', 'order.schema.ts'), 'export class Schema {}');
+    run(['init', '-p', dir]);
+    const content = fs.readFileSync(path.join(dir, '.context.yml'), 'utf-8');
+    expect(content).toContain('extends: nestjs');
+  });
+
+  it('prints "--force to overwrite" hint when config exists', () => {
+    fs.writeFileSync(path.join(dir, '.context.yml'), 'pre-existing');
+    const r = run(['init', '-p', dir]);
+    expect(r.stderr).toContain('--force');
   });
 });
 

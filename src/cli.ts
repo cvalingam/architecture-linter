@@ -323,22 +323,88 @@ program
 const KNOWN_LAYERS = [
   'controller', 'service', 'repository', 'middleware', 'model',
   'handler', 'resolver', 'provider', 'store', 'gateway', 'adapter',
-  'route', 'util', 'helper',
+  'route', 'util', 'helper', 'schema', 'dto', 'guard', 'filter',
+  'interceptor', 'pipe', 'decorator', 'worker', 'event',
 ];
+
+/** Detect which framework/preset fits the project based on package.json deps. */
+function detectFramework(projectDir: string): 'nestjs' | 'nextjs' | null {
+  const pkgPath = path.join(projectDir, 'package.json');
+  if (!fs.existsSync(pkgPath)) return null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+    if ('@nestjs/core' in allDeps || '@nestjs/common' in allDeps) return 'nestjs';
+    if ('next' in allDeps) return 'nextjs';
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * Detect NestJS layers by scanning for typed file suffixes (*.controller.ts etc.)
+ * inside src/ and module subdirectories.
+ */
+function detectNestJsLayersFromFiles(projectDir: string): string[] {
+  const suffixToLayer: Record<string, string> = {
+    'controller': 'controller',
+    'service': 'service',
+    'schema': 'schema',
+    'module': 'module',
+    'guard': 'guard',
+    'filter': 'filter',
+    'interceptor': 'interceptor',
+    'pipe': 'pipe',
+    'decorator': 'decorator',
+  };
+  const found = new Set<string>();
+  const dirsToSearch = [projectDir, path.join(projectDir, 'src')];
+
+  for (const base of dirsToSearch) {
+    if (!fs.existsSync(base)) continue;
+    try {
+      const walk = (dir: string, depth: number) => {
+        if (depth > 4) return;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== 'dist') {
+            walk(path.join(dir, entry.name), depth + 1);
+            if (entry.name === 'dto') found.add('dto');
+          } else if (entry.isFile() && entry.name.endsWith('.ts')) {
+            for (const [suffix, layer] of Object.entries(suffixToLayer)) {
+              if (entry.name.endsWith(`.${suffix}.ts`)) found.add(layer);
+            }
+          }
+        }
+      };
+      walk(base, 0);
+    } catch { /* ignore */ }
+  }
+  return [...found];
+}
 
 program
   .command('init')
   .description('Generate a starter .context.yml by inspecting the project directory structure')
   .option('-p, --project <path>', 'root directory of the project', '.')
-  .action((options: { project: string }) => {
+  .option('--force', 'overwrite an existing .context.yml', false)
+  .action((options: { project: string; force: boolean }) => {
     const projectDir = path.resolve(options.project);
     const outputPath = path.join(projectDir, '.context.yml');
 
-    if (fs.existsSync(outputPath)) {
-      console.error(chalk.yellow(`A .context.yml already exists at ${outputPath}`));
+    if (fs.existsSync(outputPath) && !options.force) {
+      console.error(chalk.yellow(
+        `A .context.yml already exists at ${outputPath}\n` +
+        `Run with ${chalk.bold('--force')} to overwrite it.`
+      ));
       process.exit(1);
     }
 
+    // ── Framework detection ────────────────────────────────────────────────
+    const framework = detectFramework(projectDir);
+
+    // ── Directory-name layer detection ────────────────────────────────────
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(projectDir, { withFileTypes: true });
@@ -347,7 +413,6 @@ program
       process.exit(1);
     }
 
-    // Also scan inside a top-level src/ folder, which is a common pattern
     const srcDir = path.join(projectDir, 'src');
     if (fs.existsSync(srcDir)) {
       try {
@@ -363,15 +428,26 @@ program
       return lower.endsWith('y') ? [lower, lower.slice(0, -1) + 'ies'] : [lower, lower + 's'];
     };
 
-    const detectedLayers: string[] = [];
-    for (const dir of dirs) {
-      const lower = dir.name.toLowerCase();
+    const detectedFromDirs: string[] = [];
+    for (const d of dirs) {
+      const lower = d.name.toLowerCase();
       for (const layer of KNOWN_LAYERS) {
-        if (candidates(layer).includes(lower) && !detectedLayers.includes(layer)) {
-          detectedLayers.push(layer);
+        if (candidates(layer).includes(lower) && !detectedFromDirs.includes(layer)) {
+          detectedFromDirs.push(layer);
           break;
         }
       }
+    }
+
+    // ── File-suffix detection (NestJS *.controller.ts pattern) ────────────
+    const detectedFromFiles = framework === 'nestjs'
+      ? detectNestJsLayersFromFiles(projectDir)
+      : [];
+
+    // Merge: file-suffix detection fills gaps not found by directory names
+    const detectedLayers = [...detectedFromDirs];
+    for (const l of detectedFromFiles) {
+      if (!detectedLayers.includes(l)) detectedLayers.push(l);
     }
 
     if (detectedLayers.length === 0) {
@@ -379,51 +455,128 @@ program
       detectedLayers.push('controller', 'service', 'repository');
     }
 
-    const layersYaml = detectedLayers.map(l => `    - ${l}`).join('\n');
-    const rulesYaml = detectedLayers
-      .map(l => `  ${l}:\n    cannot_import: []`)
-      .join('\n\n');
+    // ── Build YAML content ─────────────────────────────────────────────────
+    let content: string;
+    const NESTJS_PRESET_LAYERS = [
+      'module','controller','service','schema','dto','utils',
+      'guard','decorator','filter','interceptor','pipe',
+    ];
 
-    const content = [
-      '# .context.yml \u2014 generated by architecture-linter init',
-      '#',
-      '# Define which layers exist and what each layer is forbidden from importing.',
-      '# Example: prevent controllers from importing repositories directly:',
-      '#',
-      '#   controller:',
-      '#     cannot_import:',
-      '#       - repository',
-      '#',
-      '# To whitelist instead of blacklist, use can_only_import:',
-      '#',
-      '#   repository:',
-      '#     can_only_import: []  # repository imports nothing from other layers',
-      '#',
-      '# To scope a rule to specific files, add a files glob:',
-      '#',
-      '#   controller:',
-      '#     files: "src/controllers/**"',
-      '#     cannot_import:',
-      '#       - repository',
-      '',
-      'architecture:',
-      '  layers:',
-      layersYaml,
-      '',
-      'rules:',
-      rulesYaml,
-      '',
-      '# Exclude patterns (project-relative globs):',
-      '# exclude:',
-      '#   - "**/*.spec.ts"',
-      '#   - "**/__mocks__/**"',
-      '',
-    ].join('\n');
+    if (framework === 'nestjs') {
+      const extraLayers = detectedLayers.filter(l => !NESTJS_PRESET_LAYERS.includes(l));
+      const extraLayersYaml = extraLayers.length > 0
+        ? '\n  # Extra layers detected in this project:\n' + extraLayers.map(l => `    - ${l}`).join('\n')
+        : '';
+
+      content = [
+        '# .context.yml \u2014 generated by architecture-linter init',
+        '# Framework detected: NestJS',
+        '#',
+        '# This config extends the built-in "nestjs" preset, which enforces:',
+        '#   - controller cannot import schema or another controller',
+        '#   - service cannot import controller',
+        '#   - utils cannot import service or controller',
+        '#   - guard/interceptor/pipe cannot import schema',
+        '#',
+        '# Add project-specific overrides in the rules section below.',
+        '',
+        'extends: nestjs',
+        '',
+        'architecture:',
+        '  layers: []  # preset provides the base layers; add extras here if needed' + extraLayersYaml,
+        '',
+        'rules: {}  # preset rules are active; override or add per-layer rules here',
+        '#',
+        '# Example — prevent workers from importing controllers or schemas:',
+        '#   worker:',
+        '#     cannot_import:',
+        '#       - controller',
+        '#       - schema',
+        '',
+        '# Exclude patterns (project-relative globs):',
+        '# exclude:',
+        '#   - "**/*.spec.ts"',
+        '#   - "**/__mocks__/**"',
+        '',
+      ].join('\n');
+
+    } else if (framework === 'nextjs') {
+      content = [
+        '# .context.yml \u2014 generated by architecture-linter init',
+        '# Framework detected: Next.js',
+        '#',
+        '# This config extends the built-in "nextjs" preset, which enforces:',
+        '#   - page and component cannot import api routes directly',
+        '#',
+        '',
+        'extends: nextjs',
+        '',
+        'architecture:',
+        '  layers: []  # preset provides the base layers',
+        '',
+        'rules: {}  # add project-specific overrides here',
+        '',
+        '# Exclude patterns (project-relative globs):',
+        '# exclude:',
+        '#   - "**/*.test.ts"',
+        '',
+      ].join('\n');
+
+    } else {
+      const layersYaml = detectedLayers.map(l => `    - ${l}`).join('\n');
+      const rulesYaml = detectedLayers
+        .map(l => `  ${l}:\n    cannot_import: []`)
+        .join('\n\n');
+
+      content = [
+        '# .context.yml \u2014 generated by architecture-linter init',
+        '#',
+        '# Define which layers exist and what each layer is forbidden from importing.',
+        '# Example: prevent controllers from importing repositories directly:',
+        '#',
+        '#   controller:',
+        '#     cannot_import:',
+        '#       - repository',
+        '#',
+        '# To whitelist instead of blacklist, use can_only_import:',
+        '#',
+        '#   repository:',
+        '#     can_only_import: []  # repository imports nothing from other layers',
+        '#',
+        '# To scope a rule to specific files, add a files glob:',
+        '#',
+        '#   controller:',
+        '#     files: "src/controllers/**"',
+        '#     cannot_import:',
+        '#       - repository',
+        '',
+        'architecture:',
+        '  layers:',
+        layersYaml,
+        '',
+        'rules:',
+        rulesYaml,
+        '',
+        '# Exclude patterns (project-relative globs):',
+        '# exclude:',
+        '#   - "**/*.spec.ts"',
+        '#   - "**/__mocks__/**"',
+        '',
+      ].join('\n');
+    }
 
     fs.writeFileSync(outputPath, content, 'utf-8');
+
     console.log(chalk.green(`\u2705 Created .context.yml at: ${outputPath}`));
-    console.log(`   Detected layers: ${chalk.cyan(detectedLayers.join(', '))}`);
-    console.log(`\n${chalk.dim('Edit the rules section to add your constraints, then run:')}`);
+    if (framework) {
+      console.log(`   Framework:       ${chalk.cyan(framework)} ${chalk.dim('(preset applied)')}`);
+    }
+    if (detectedFromFiles.length > 0) {
+      console.log(`   Layers (files):  ${chalk.cyan(detectedFromFiles.join(', '))}`);
+    } else if (!framework) {
+      console.log(`   Detected layers: ${chalk.cyan(detectedLayers.join(', '))}`);
+    }
+    console.log(`\n${chalk.dim('Run a scan to see your architecture health:')}`);
     console.log(`   ${chalk.bold('architecture-linter scan')}\n`);
   });
 
