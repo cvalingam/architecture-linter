@@ -1,5 +1,11 @@
 # architecture-linter
 
+[![npm version](https://img.shields.io/npm/v/architecture-linter.svg)](https://www.npmjs.com/package/architecture-linter)
+[![npm downloads](https://img.shields.io/npm/dm/architecture-linter.svg)](https://www.npmjs.com/package/architecture-linter)
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/cvalingam.architecture-linter.svg?label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=cvalingam.architecture-linter)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/cvalingam?label=Sponsor&logo=githubsponsors&color=EA4AAA)](https://github.com/sponsors/cvalingam)
+
 > Enforce architectural layer rules in TypeScript projects from the command line.
 
 `architecture-linter` reads a `.context.yml` configuration file and scans your
